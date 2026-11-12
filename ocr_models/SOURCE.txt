@@ -1,0 +1,31 @@
+Mô hình OCR đi kèm ứng dụng (dùng với PaddleOCR 3.x, engine ONNX Runtime)
+========================================================================
+
+PP-OCRv6_small_det/   phát hiện vùng chữ      (inference.onnx + inference.yml)
+PP-OCRv6_small_rec/   nhận dạng chữ           (inference.onnx + inference.yml)
+
+Nguồn gốc
+---------
+- Hai file inference.onnx là mô hình PP-OCRv6 small của PaddleOCR (giấy phép Apache-2.0),
+  bản đã chuyển sang ONNX được phát hành kèm gói `rapidocr` 3.10.0 trên PyPI (Apache-2.0).
+- Hai file inference.yml do scripts/build_ocr_models_from_rapidocr.py sinh ra theo cấu hình PP-OCR chuẩn
+  (bộ ký tự lấy từ metadata của mô hình nhận dạng). Đây KHÔNG phải file cấu hình gốc trong gói mô hình
+  chính thức của PaddlePaddle.
+
+PP-OCRv6_medium_det/  phát hiện vùng chữ      (inference.pdiparams + inference.json + inference.yml)
+PP-OCRv6_medium_rec/  nhận dạng chữ           (inference.pdiparams + inference.json + inference.yml)
+
+- Mô hình PP-OCRv6 medium CHÍNH THỨC định dạng Paddle (Apache-2.0), tải bằng
+  scripts/download_ocr_models.py --profile v6_medium --format paddle  (trình quản lý mô hình của PaddleX 3.7).
+- Dùng cho engine PaddlePaddle (mặc định của bản cài đặt có kèm PaddlePaddle; chạy GPU NVIDIA nếu có).
+  Engine ONNX Runtime không dùng hai thư mục này.
+
+Thay bằng gói chính thức
+------------------------
+    python scripts/download_ocr_models.py            # tải PP-OCRv6_small_*_onnx từ Hugging Face/ModelScope/BOS
+Ứng dụng nhận cả hai kiểu tên thư mục: <tên> hoặc <tên>_onnx.
+
+Hạn chế đã biết
+---------------
+Bộ ký tự của PP-OCRv6 không có phần lớn chữ tiếng Việt mang dấu thanh (ví dụ ầ, ễ, ợ), nên văn bản OCR thô có thể
+thiếu dấu. Việc so khớp thuốc không phân biệt dấu nên không bị ảnh hưởng.

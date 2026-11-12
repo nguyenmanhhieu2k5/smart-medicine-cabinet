@@ -1,0 +1,28 @@
+# Node
+node_modules/
+frontend/dist/
+release/
+
+# Python (mọi môi trường ảo, kể cả venv tạo nhầm chỗ như backend/backend/.venv)
+.venv/
+venv/
+backend/build/
+backend/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Dữ liệu người dùng / tạm (không bao giờ nằm trong mã nguồn)
+*.db
+*.db-shm
+*.db-wal
+*.smcbak
+.env
+.env.*
+!.env.example
+
+# Hệ điều hành / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,7 @@
+# Thư viện cho kiểm thử và đóng gói (không cần khi chạy ứng dụng).
+-r requirements.txt
+pytest==9.2.0
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib>=2026.10
+# Chỉ dùng cho scripts/make_icons.py và scripts/build_ocr_models_from_rapidocr.py:
+#   pillow, playwright, rapidocr

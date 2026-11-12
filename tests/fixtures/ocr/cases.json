@@ -1,0 +1,183 @@
+[
+  {
+    "file": "01_ro_net_augmentin_625.jpg",
+    "kind": "clear",
+    "text": [
+      "Augmentin 625mg",
+      "Amoxicillin 500mg / Acid clavulanic 125mg",
+      "Viên nén bao phim",
+      "Hộp 2 vỉ x 7 viên",
+      "SĐK: VN-20169-16"
+    ],
+    "expect": {
+      "top_ids": [
+        34382
+      ],
+      "status": "confident",
+      "strength_tokens": [
+        "500mg",
+        "125mg"
+      ]
+    }
+  },
+  {
+    "file": "02_cung_ten_augmentin_250.jpg",
+    "kind": "same_name_other_strength",
+    "text": [
+      "Augmentin",
+      "250mg/31,25mg",
+      "Bột pha hỗn dịch uống",
+      "Hộp 12 gói"
+    ],
+    "expect": {
+      "top_ids": [
+        31802
+      ],
+      "not_ids": [
+        30930,
+        34382,
+        34381
+      ]
+    }
+  },
+  {
+    "file": "03_cung_ten_augmentin_500_62.jpg",
+    "kind": "same_name_other_strength",
+    "text": [
+      "Augmentin",
+      "500mg/62,5mg",
+      "Bột pha hỗn dịch uống",
+      "Hộp 12 gói"
+    ],
+    "expect": {
+      "top_ids": [
+        30930
+      ],
+      "not_ids": [
+        31802,
+        34382,
+        34381
+      ]
+    }
+  },
+  {
+    "file": "04_cung_ten_augmentin_1g.jpg",
+    "kind": "same_name_other_strength",
+    "text": [
+      "Augmentin 1g",
+      "Amoxicillin 875mg + Acid clavulanic 125mg",
+      "Viên nén bao phim"
+    ],
+    "expect": {
+      "top_ids": [
+        34381,
+        23159
+      ],
+      "not_ids": [
+        34382,
+        31802,
+        30930
+      ]
+    }
+  },
+  {
+    "file": "05_mo_paracetamol_500.jpg",
+    "kind": "blurred",
+    "text": [
+      "Paracetamol 500mg",
+      "Viên nén",
+      "Hộp 10 vỉ x 10 viên"
+    ],
+    "expect": {
+      "top_name_core": "paracetamol",
+      "strength_tokens": [
+        "500mg"
+      ]
+    }
+  },
+  {
+    "file": "06_nghieng_hapacol_250.jpg",
+    "kind": "tilted",
+    "text": [
+      "Hapacol 250",
+      "Paracetamol 250mg",
+      "Thuốc bột sủi bọt",
+      "Hộp 24 gói x 1,5g"
+    ],
+    "expect": {
+      "top_ids": [
+        6365,
+        6364
+      ]
+    }
+  },
+  {
+    "file": "07_xoay_nguoc_efferalgan.jpg",
+    "kind": "upside_down",
+    "text": [
+      "Efferalgan",
+      "Paracetamol 500mg",
+      "Viên nén sủi bọt"
+    ],
+    "expect": {
+      "top_name_core": "efferalgan",
+      "preprocess_contains": "rotate_180"
+    }
+  },
+  {
+    "file": "08_toi_panadol_extra.jpg",
+    "kind": "dark",
+    "text": [
+      "Panadol Extra",
+      "Paracetamol 500mg  Caffeine 65mg",
+      "Viên nén bao phim"
+    ],
+    "expect": {
+      "top_name_core": "panadol extra"
+    }
+  },
+  {
+    "file": "09_thieu_chu_chi_co_ten.jpg",
+    "kind": "missing_text",
+    "text": [
+      "Augmentin"
+    ],
+    "expect": {
+      "status": "uncertain",
+      "top_name_core": "augmentin"
+    }
+  },
+  {
+    "file": "10_co_han_dung.jpg",
+    "kind": "expiry",
+    "text": [
+      "Fogicap 40",
+      "Omeprazol 40mg",
+      "SĐK: VD-34703-20",
+      "Số lô: 010225   NSX: 12/02/2025",
+      "HSD: 12/02/2028"
+    ],
+    "expect": {
+      "top_ids": [
+        52211
+      ],
+      "expiry": "2028-02-12"
+    }
+  },
+  {
+    "file": "11_khong_phai_thuoc.jpg",
+    "kind": "not_medicine",
+    "text": [
+      "Sổ tay ghi chép",
+      "Lớp 12A1 - Năm học 2026",
+      "Trường THPT"
+    ],
+    "expect": {
+      "status_in": [
+        "no_match",
+        "uncertain"
+      ],
+      "never_confident": true
+    }
+  }
+]

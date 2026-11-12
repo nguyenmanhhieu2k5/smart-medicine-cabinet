@@ -1,0 +1,185 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/manrope";
+
+@custom-variant dark (&:where(.dark, .dark *));
+/* Màn hình thấp (vd 1366×768): thu gọn khoảng cách theo chiều dọc */
+@custom-variant short (@media (max-height: 860px));
+
+/* ------------------------------------------------------------------ */
+/* Design tokens — Premium Minimalist Smart Home / Modern Medical      */
+/* ------------------------------------------------------------------ */
+:root {
+  --smc-bg: #f7f7f5;
+  --smc-surface: #ffffff;
+  --smc-tile: #f5f7fb;
+  --smc-navy: #111b39;
+  --smc-muted: #687287;
+  --smc-line: #e8ebf0;
+  --smc-primary: #0878f9;
+  --smc-primary-soft: #e9f2fe;
+  --smc-success: #10a477;
+  --smc-success-soft: #e8f6f0;
+  --smc-warning: #f59e0b;
+  --smc-warning-soft: #fef4e2;
+  --smc-warning-ink: #b46a00;
+  --smc-danger: #e5484d;
+  --smc-danger-soft: #fdecec;
+  --smc-shadow: 0 1px 2px rgba(17, 27, 57, 0.03), 0 14px 36px rgba(17, 27, 57, 0.045);
+  --smc-glow: rgba(8, 120, 249, 0.07);
+  color-scheme: light;
+}
+
+.dark {
+  --smc-bg: #0d1322;
+  --smc-surface: #151c2f;
+  --smc-tile: #1b243b;
+  --smc-navy: #eef2fb;
+  --smc-muted: #97a3bb;
+  --smc-line: #27314b;
+  --smc-primary: #3b96ff;
+  --smc-primary-soft: #14294d;
+  --smc-success: #2fc191;
+  --smc-success-soft: #12302a;
+  --smc-warning: #f6b23c;
+  --smc-warning-soft: #3a2c10;
+  --smc-warning-ink: #f6b23c;
+  --smc-danger: #f0666a;
+  --smc-danger-soft: #3b1a1d;
+  --smc-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.25);
+  --smc-glow: rgba(59, 150, 255, 0.08);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-display: "Manrope Variable", "Inter Variable", "Segoe UI", system-ui, sans-serif;
+
+  --color-bg: var(--smc-bg);
+  --color-surface: var(--smc-surface);
+  --color-tile: var(--smc-tile);
+  --color-navy: var(--smc-navy);
+  --color-muted: var(--smc-muted);
+  --color-line: var(--smc-line);
+  --color-primary: var(--smc-primary);
+  --color-primary-soft: var(--smc-primary-soft);
+  --color-success: var(--smc-success);
+  --color-success-soft: var(--smc-success-soft);
+  --color-warning: var(--smc-warning);
+  --color-warning-soft: var(--smc-warning-soft);
+  --color-warning-ink: var(--smc-warning-ink);
+  --color-danger: var(--smc-danger);
+  --color-danger-soft: var(--smc-danger-soft);
+
+  --radius-card: 28px;
+  --radius-tile: 20px;
+  --radius-control: 16px;
+  --shadow-card: var(--smc-shadow);
+  --shadow-button: 0 10px 24px rgba(8, 120, 249, 0.28);
+
+  --breakpoint-3xl: 1760px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--smc-bg);
+    color: var(--smc-navy);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+    overflow: hidden;
+  }
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  :focus-visible {
+    outline: 2px solid var(--smc-primary);
+    outline-offset: 2px;
+  }
+  input[type="number"]::-webkit-inner-spin-button {
+    opacity: 0.4;
+  }
+  ::selection {
+    background: var(--smc-primary-soft);
+  }
+}
+
+@layer components {
+  /* Thanh cuộn mảnh, kín đáo như ứng dụng desktop */
+  .scroll-area {
+    scrollbar-width: thin;
+    scrollbar-color: var(--smc-line) transparent;
+  }
+  .scroll-area::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-area::-webkit-scrollbar-thumb {
+    background: var(--smc-line);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .app-backdrop {
+    background:
+      radial-gradient(900px 320px at 62% -8%, var(--smc-glow), transparent 70%),
+      var(--smc-bg);
+  }
+  .btn-gradient {
+    background: linear-gradient(90deg, #2ea3f8 0%, #0878f9 100%);
+  }
+  .skeleton {
+    background: linear-gradient(90deg, var(--smc-tile) 25%, var(--smc-line) 37%, var(--smc-tile) 63%);
+    background-size: 400% 100%;
+    animation: skeleton 1.4s ease infinite;
+    border-radius: 12px;
+  }
+  @keyframes skeleton {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0 50%;
+    }
+  }
+  @keyframes scanline {
+    0% {
+      transform: translateY(0);
+      opacity: 0;
+    }
+    12%,
+    88% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(var(--scan-distance, 240px));
+      opacity: 0;
+    }
+  }
+  .scanline {
+    animation: scanline 2.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scanline,
+    .skeleton {
+      animation: none;
+    }
+  }
+}
