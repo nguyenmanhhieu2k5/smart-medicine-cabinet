@@ -14,7 +14,7 @@ from app.models import CabinetItem, Reminder, ReminderLog
 from app.schemas.reminder import ReminderCreate, ReminderLogRequest, ReminderUpdate
 from app.services import history, settings_store
 from app.services.alerts import engine as alert_engine
-from app.services.cabinet import format_quantity
+from app.services.cabinet import format_quantity, log_inventory
 from app.services.reminders.schedule import build_schedule, occurrences, serialize_reminder
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
@@ -161,6 +161,8 @@ def log_occurrence(reminder_id: int, body: ReminderLogRequest, ctx: AppContext =
             if item is not None and delta != 0:
                 old = item.quantity
                 item.quantity = max(0.0, round(item.quantity + delta, 3))
+                log_inventory(s, item, "consume" if delta < 0 else "add", old, item.quantity,
+                              note=f"Lời nhắc: {reminder.medicine_name}")
                 item.updated_at = now
                 stock_note = f" · tồn {format_quantity(old)} → {format_quantity(item.quantity)} {item.unit}"
                 history.record(

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/history", tags=["history"])
 @router.get("")
 def list_history(
     q: str = Query("", max_length=200),
-    group: str = Query("all", pattern="^(all|scan|cabinet|reminder|alert|system)$"),
+    group: str = Query("all", pattern="^(all|scan|cabinet|reminder|alert|system|device)$"),
     start: date | None = Query(None, alias="from"),
     end: date | None = Query(None, alias="to"),
     page: int = Query(1, ge=1),

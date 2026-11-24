@@ -13,6 +13,7 @@ const PAGES = [
   { link: "Nhắc uống thuốc", title: "Nhắc uống thuốc", path: "/reminders" },
   { link: "Cảnh báo", title: "Cảnh báo", path: "/alerts" },
   { link: "Lịch sử", title: "Lịch sử", path: "/history" },
+  { link: "Quản trị", title: "Quản trị", path: "/admin/devices" },
   { link: "Hồ sơ", title: "Hồ sơ", path: "/profile" },
   { link: "Cài đặt", title: "Cài đặt", path: "/settings" },
 ];
@@ -29,7 +30,7 @@ describe("AppShell dùng chung cho mọi trang", () => {
     installMockApi();
   });
 
-  it("giữ nguyên Sidebar và Topbar (cùng phần tử DOM, cùng cấu trúc) khi đi qua 9 trang", async () => {
+  it("giữ nguyên Sidebar và Topbar (cùng phần tử DOM, cùng cấu trúc) khi đi qua 10 trang", async () => {
     const user = userEvent.setup();
     renderApp("/");
     const sidebar = screen.getByTestId("sidebar");
@@ -49,7 +50,7 @@ describe("AppShell dùng chung cho mọi trang", () => {
       expect(signature(sidebar)).toBe(sidebarSignature);
       expect(signature(topbar)).toBe(topbarSignature);
 
-      // Đúng 9 mục điều hướng theo thứ tự thiết kế, mục hiện tại được đánh dấu.
+      // Đúng 10 mục điều hướng theo thứ tự thiết kế, mục hiện tại được đánh dấu.
       const links = within(sidebar).getAllByRole("link").map((link) => link.textContent?.replace(/\d+$/, "").trim());
       expect(links).toEqual(PAGES.map((p) => p.link));
       expect(within(sidebar).getByRole("link", { current: "page" })).toHaveTextContent(page.link);

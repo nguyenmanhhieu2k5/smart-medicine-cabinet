@@ -98,7 +98,8 @@ export function ScanStage({ autoStart = false, previewClassName, caption }: Scan
     <div className="flex min-h-0 flex-1 flex-col">
       <div
         className={clsx(
-          "relative w-full flex-1 overflow-hidden rounded-[22px] bg-gradient-to-br from-[#e9edf3] via-[#f3f5f8] to-[#dfe5ee] dark:from-[#1b243b] dark:via-[#182036] dark:to-[#111a2e]",
+          // (4) Nền vùng camera/quét thuốc: #E6F2FF.
+          "relative w-full flex-1 overflow-hidden rounded-[22px] bg-scan-panel",
           previewClassName,
         )}
       >
@@ -132,7 +133,7 @@ export function ScanStage({ autoStart = false, previewClassName, caption }: Scan
         <div ref={guideRef} className="pointer-events-none absolute inset-x-[19%] inset-y-[13%] max-xl:inset-x-[14%]">
           <Corner position="tl" /><Corner position="tr" /><Corner position="bl" /><Corner position="br" />
           {(busy || camera.status === "starting") && active && (
-            <span aria-hidden className="scanline absolute inset-x-3 top-2 h-0.5 rounded-full bg-primary shadow-[0_0_16px_2px_rgba(8,120,249,0.65)]" style={{ ["--scan-distance" as string]: `${(guideRef.current?.clientHeight ?? 260) - 16}px` }} />
+            <span aria-hidden className="scanline absolute inset-x-3 top-2 h-0.5 rounded-full bg-primary shadow-[0_0_16px_2px_rgba(0,102,255,0.65)]" style={{ ["--scan-distance" as string]: `${(guideRef.current?.clientHeight ?? 260) - 16}px` }} />
           )}
         </div>
 
@@ -172,7 +173,8 @@ export function ScanStage({ autoStart = false, previewClassName, caption }: Scan
           className="group relative inline-flex size-[108px] items-center justify-center rounded-full outline-offset-4 transition-transform duration-200 hover:scale-[1.03] active:scale-95 disabled:opacity-70 short:size-[84px]"
         >
           <span aria-hidden className="absolute inset-0 rounded-full bg-primary/12 ring-1 ring-primary/10" />
-          <span className="relative inline-flex size-[90px] items-center justify-center rounded-full bg-gradient-to-b from-[#3aa0fb] to-[#0872f5] text-white shadow-[0_14px_30px_rgba(8,120,249,0.38)] short:size-[70px]">
+          {/* (5) Nút chính Quét thuốc: #0066FF */}
+          <span className="relative inline-flex size-[90px] items-center justify-center rounded-full bg-primary text-white shadow-[0_14px_30px_rgba(0,102,255,0.38)] short:size-[70px]">
             {busy ? <LoaderCircle size={34} className="animate-spin" /> : <Camera size={36} strokeWidth={1.9} className="short:scale-90" />}
           </span>
         </button>

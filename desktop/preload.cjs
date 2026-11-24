@@ -3,6 +3,7 @@
  *
  * Renderer KHÔNG có quyền Node.js. Chỉ những hàm liệt kê dưới đây được đưa ra `window.smc`;
  * mỗi hàm ánh xạ tới đúng một kênh IPC cố định, không nhận tên kênh từ trang web.
+ * Refresh token không bao giờ đi qua cầu nối này — giao diện chỉ nhận access token ngắn hạn.
  * Kiểu TypeScript tương ứng: frontend/src/types/desktop.d.ts
  */
 const { contextBridge, ipcRenderer } = require("electron");
@@ -18,11 +19,17 @@ contextBridge.exposeInMainWorld("smc", {
   appVersion: readVersion(),
   platform: process.platform,
 
-  /** Địa chỉ + token của backend cục bộ. Chờ tới khi backend sẵn sàng hoặc báo lỗi. */
+  /** Trạng thái kết nối máy chủ + phiên Admin (tự khôi phục phiên đã lưu khi mở ứng dụng). */
   getBackend: () => ipcRenderer.invoke("smc:backend"),
-
-  /** Mở hộp thoại chọn file Excel; trả về đường dẫn hoặc null. */
-  pickExcelFile: () => ipcRenderer.invoke("smc:pick-excel"),
+  /** Kiểm tra rồi lưu địa chỉ API quản trị (Tailscale) của Mini PC. */
+  setServer: (url) => ipcRenderer.invoke("smc:server-set", String(url || "")),
+  /** Quên máy chủ (đăng xuất trước). */
+  forgetServer: () => ipcRenderer.invoke("smc:server-forget"),
+  /** Đăng nhập Admin — tiến trình chính gọi máy chủ và giữ refresh token. */
+  login: (email, password) => ipcRenderer.invoke("smc:login", { email: String(email || ""), password: String(password || "") }),
+  /** Lấy access token mới (khi token cũ sắp hết hạn hoặc bị từ chối 401). */
+  refreshSession: () => ipcRenderer.invoke("smc:refresh"),
+  logout: () => ipcRenderer.invoke("smc:logout"),
 
   /** Hiện thông báo Windows. */
   notify: (payload) =>
@@ -42,10 +49,8 @@ contextBridge.exposeInMainWorld("smc", {
     return () => ipcRenderer.removeListener("smc:navigate", listener);
   },
 
-  openDataFolder: () => ipcRenderer.invoke("smc:open-data"),
-  openLogFolder: () => ipcRenderer.invoke("smc:open-logs"),
   setTrayEnabled: (enabled) => ipcRenderer.invoke("smc:tray", Boolean(enabled)),
 
-  /** Khởi động lại toàn bộ ứng dụng (dùng khi dịch vụ nền lỗi). */
+  /** Khởi động lại toàn bộ ứng dụng. */
   relaunch: () => ipcRenderer.invoke("smc:relaunch"),
 });

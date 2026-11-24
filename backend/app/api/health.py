@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app import __version__
 from app.api.deps import get_ctx
@@ -12,7 +12,7 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health(ctx: AppContext = Depends(get_ctx)) -> dict:
+def health(request: Request, ctx: AppContext = Depends(get_ctx)) -> dict:
     db_ok, catalog_count = True, 0
     try:
         with ctx.db.session() as s:
@@ -26,5 +26,8 @@ def health(ctx: AppContext = Depends(get_ctx)) -> dict:
         "database": "ok" if db_ok else "error",
         "catalog_count": catalog_count,
         "ocr": ctx.ocr.status()["state"],
+        "ai": "ready" if ctx.ai.configured else "not_configured",
         "import_running": ctx.imports.is_running(),
+        # Ứng dụng Windows dùng trường này để từ chối nhầm địa chỉ API công khai.
+        "channel": getattr(request.app.state, "channel", "admin"),
     }

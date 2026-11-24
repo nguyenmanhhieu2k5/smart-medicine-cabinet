@@ -157,3 +157,63 @@ describe("Thuốc trong tủ", () => {
     expect(api.calls.some((call) => call.method === "DELETE")).toBe(false);
   });
 });
+
+describe("Mã vạch thuốc (Cài đặt)", () => {
+  it("chọn file → máy chủ chỉ kiểm tra; xem báo cáo rồi mới nhập; gỡ liên kết phải xác nhận", async () => {
+    const user = userEvent.setup();
+    renderApp("/settings");
+    expect(await screen.findByText("Chưa có mã vạch")).toBeInTheDocument();
+
+    await user.upload(screen.getByTestId("barcode-file"), new File(["x"], "nha_thuoc.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    const report = await screen.findByTestId("barcode-report");
+    expect(api.calls).toContainEqual({ method: "POST", path: "/catalog/barcodes/import", body: { file: "<file nha_thuoc.xlsx>", dry_run: "true" } });
+    expect(api.calls.some((call) => (call.body as { dry_run?: string } | null)?.dry_run === "false")).toBe(false); // chưa ghi gì
+    expect(within(report).getByText("8 / 11")).toBeInTheDocument();
+    expect(within(report).getByText(/Efferalgan/)).toBeInTheDocument();
+    expect(within(report).getByText("Nhiều thuốc khớp")).toBeInTheDocument();
+
+    await user.click(within(report).getByRole("button", { name: "Nhập 5 mã vạch" }));
+    await waitFor(() => expect(api.calls).toContainEqual({ method: "POST", path: "/catalog/barcodes/import", body: { file: "<file nha_thuoc.xlsx>", dry_run: "false" } }));
+    expect(await screen.findByText("5 mã · 4 thuốc")).toBeInTheDocument();
+    expect(screen.queryByTestId("barcode-report")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Mã vạch cần tra"), "8935206010120");
+    await user.click(screen.getByRole("button", { name: "Tra" }));
+    const found = await screen.findByTestId("barcode-lookup");
+    expect(found).toHaveTextContent("Augmentin 625mg tablets");
+    await user.click(within(found).getByRole("button", { name: "Gỡ liên kết" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(api.calls.some((call) => call.method === "DELETE")).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Gỡ liên kết" }));
+    await waitFor(() => expect(api.calls).toContainEqual({ method: "DELETE", path: "/catalog/barcodes/08935206010120", body: null }));
+  });
+});
+
+describe("AI tra cứu trên mạng (Gemini)", () => {
+  it("chỉ chạy khi người dùng bấm “Tìm bằng AI”; kết quả có độ tin cậy, nguồn, lưu ý và thuốc khớp danh mục", async () => {
+    api.job = job("uncertain", [candidate(1, "Augmentin 250mg/31,25mg", "250mg/31,25mg", 77.5)]);
+    const user = userEvent.setup();
+    renderApp("/scan/result/job1");
+    const panel = await screen.findByTestId("ai-panel");
+    expect(api.calls.some((call) => call.path.startsWith("/ai/"))).toBe(false); // không tự gọi AI
+    await user.click(within(panel).getByRole("button", { name: "Tìm bằng AI" }));
+    const result = await within(panel).findByTestId("ai-result");
+    expect(api.calls).toContainEqual({ method: "POST", path: "/ai/scans/job1", body: null });
+    expect(result).toHaveTextContent("Augmentin 625mg");
+    expect(result).toHaveTextContent("AI · đã tra trên mạng");
+    expect(result).toHaveTextContent("Độ tin cậy: Cao");
+    expect(result).toHaveTextContent("Khớp số đăng ký");
+    expect(within(result).getByRole("link", { name: /nhathuoc\.example/ })).toHaveAttribute("href", "https://example.com/augmentin");
+    expect(result).toHaveTextContent("hỏi dược sĩ");
+    expect(api.calls.some((call) => call.method === "POST" && call.path === "/cabinet/medicines")).toBe(false); // không tự vào tủ
+  });
+
+  it("Cài đặt: trạng thái AI, không hiện khóa; báo khi chưa tìm kiếm được trên mạng", async () => {
+    api.aiSearch = false;
+    renderApp("/settings");
+    expect(await screen.findByText("AI tra cứu thuốc (Gemini)")).toBeInTheDocument();
+    expect(await screen.findByText("Đã cấu hình")).toBeInTheDocument();
+    expect(screen.getByText(/bật thanh toán cho khóa trong Google AI Studio/)).toBeInTheDocument();
+    expect(screen.getByText("gemini-3.8-flash → gemini-flash-lite-latest")).toBeInTheDocument();
+  });
+});

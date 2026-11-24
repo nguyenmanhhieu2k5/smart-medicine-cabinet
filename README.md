@@ -1,246 +1,181 @@
-# Tủ thuốc thông minh (Smart Medicine Cabinet)
+# Tủ thuốc thông minh (Smart Medicine Cabinet) — phiên bản 2.0
 
-Ứng dụng desktop cho Windows 10/11 phục vụ đề tài nghiên cứu khoa học ngành Kỹ thuật máy tính:
-quản lý thuốc trong tủ, **nhận diện thuốc bằng OCR** từ webcam/ảnh, đối chiếu với danh mục ~55.000 thuốc
-(`DAV_unique.xlsx`), theo dõi **nhiệt độ / độ ẩm qua ESP32**, cảnh báo hạn dùng và nhắc uống thuốc.
+Hệ thống nhiều nền tảng cho đề tài nghiên cứu khoa học ngành Kỹ thuật máy tính: quản lý tủ thuốc, **nhận diện thuốc
+bằng OCR**, đối chiếu với danh mục ~55.000 thuốc (`DAV_unique.xlsx`), theo dõi **nhiệt độ / độ ẩm và điều khiển còi
+ESP32 qua Internet**, cảnh báo hạn dùng, nhắc uống thuốc.
 
-![Trang chủ](docs/screenshots/01-trang-chu.png)
+| Thành phần | Vai trò | Công nghệ |
+|---|---|---|
+| **Mini PC** (HP Z2 Mini G4) | Máy chủ tự vận hành 24/7: CSDL, API, OCR, kết nối thiết bị | FastAPI · PostgreSQL 17 · PaddleOCR 3.7 (GPU Quadro P1000) · Alembic · dịch vụ Windows |
+| **Ứng dụng Windows** | Toàn quyền **ADMIN** qua Tailscale | Electron 45 · React 19 · TypeScript · Tailwind 4 |
+| **Ứng dụng điện thoại** | Chỉ quyền **SCANNER** (quét, tra cứu, lịch sử của mình) qua HTTPS | Expo SDK 58 · Expo Router · React Native 0.88 |
+| **ESP32** | DHT22 + còi; tự kết nối ra Internet (WSS), nhận lệnh có ACK | Arduino · WebSockets · ArduinoJson |
 
-> Ảnh chụp màn hình trong `docs/screenshots/` được chụp ở môi trường phát triển; các thuốc trong tủ ở ảnh là
-> **dữ liệu mẫu minh hoạ**, không đi kèm ứng dụng.
+```
+ Windows ADMIN ──Tailscale──► tailscale serve :443 ────► 127.0.0.1:8001  API quản trị  ┐
+ Điện thoại    ──HTTPS──────► Tailscale Funnel :8443* ─► 127.0.0.1:8000  API công khai ├─ 1 tiến trình FastAPI + PaddleOCR (GPU)
+ ESP32         ──WSS────────► Tailscale Funnel :8443* ─► 127.0.0.1:8000  /device/ws    ┘        │
+                                                                              PostgreSQL 17 (chỉ 127.0.0.1:5432)
+ * hoặc Cloudflare Tunnel khi có tên miền riêng — chỉ dùng một trong hai
+```
 
-| | |
-|---|---|
-| Giao diện | React 19 · TypeScript · Vite 8 · Tailwind CSS 4 · Lucide · Motion · Recharts |
-| Desktop | Electron 45 · electron-builder 26 · NSIS |
-| Backend | Python · FastAPI · Uvicorn · SQLite (FTS5) · SQLAlchemy 2 · Pydantic 2 |
-| OCR & so khớp | PaddleOCR 3.7 (PP-OCRv6; engine PaddlePaddle chạy GPU NVIDIA nếu có, hoặc ONNX Runtime trên CPU) · OpenCV · RapidFuzz · pandas · openpyxl |
+Không thiết bị nào cần chung Wi-Fi với Mini PC; không mở cổng router; PostgreSQL và API quản trị không ra Internet công khai.
+
+**Tài liệu:** [Triển khai từng bước](docs/DEPLOYMENT.md) · [Kiến trúc Cloud](docs/CLOUD_ARCHITECTURE.md) ·
+[Giao thức ESP32](docs/ESP32_PROTOCOL.md) · [Ứng dụng điện thoại](mobile/README.md) · [Đối chiếu thiết kế mobile](mobile/DESIGN.md) ·
+[Báo cáo kiểm thử](docs/TEST_REPORT.md)
 
 ---
 
-## 1. Trạng thái: đã kiểm chứng gì, chưa kiểm chứng gì
+## 1. Đã kiểm chứng gì, chưa kiểm chứng gì
 
-Ứng dụng được phát triển và kiểm thử trên **Linux** (máy ảo đám mây, không có Windows, không có webcam, không có
-ESP32). Bảng dưới đây ghi rõ từng phần.
-
-### Đã chạy và kiểm thử thật
+### Đã chạy và kiểm thử thật (trên chính Mini PC, Windows 10, 19/11/2026)
 
 | Hạng mục | Cách kiểm chứng |
 |---|---|
-| Backend (API, SQLite, nhập Excel, so khớp, cảnh báo, lời nhắc, sao lưu…) | 162 kiểm thử tự động `pytest` — xem [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
-| Nhập toàn bộ `DAV_unique.xlsx` (55.005 dòng) vào SQLite + FTS5 | Kiểm thử trên file thật, ~25 giây; nhập lại không tạo bản ghi trùng |
-| PaddleOCR 3.7.0 chạy thật (engine ONNX Runtime, không cần PaddlePaddle) | Bộ 11 ảnh **tổng hợp**: rõ, mờ, nghiêng, xoay ngược, tối, thiếu chữ, cùng tên khác hàm lượng |
-| Giao diện 11 màn hình | 31 kiểm thử `vitest`, TypeScript + ESLint sạch, ảnh chụp ở 1920×1080 / 1600×1000 / 1366×768 |
-| Electron: tự khởi động/dừng backend, cô lập renderer, token, chỉ nghe 127.0.0.1 | `npm run test:desktop` (9 bước, Electron thật + backend thật) |
-| Luồng đầu-cuối: camera (giả lập bằng file ảnh) → chụp → OCR → 3 ứng viên → xác nhận → lưu tủ thuốc | Trong Electron, cả bản mã nguồn lẫn bản đóng gói |
-| Đóng gói: PyInstaller (backend) + electron-builder (`--dir`) | Đã tạo và chạy **bản đóng gói cho Linux**; `npm run test:desktop:packed` đạt 9/9 với file Excel thật |
-| `backend/requirements.txt` cài được trên Windows x64 | Đã giải phụ thuộc "chỉ dùng wheel" cho Python 3.11, 3.12, 3.13 (không cần trình biên dịch) |
-| `scripts/*.ps1` | Kiểm tra cú pháp + chạy thử `setup-windows.ps1` bằng PowerShell 7 trên Linux |
+| Máy chủ trên PostgreSQL (API, danh mục, OCR, tủ thuốc, lời nhắc, cảnh báo, tài khoản, thiết bị, sao lưu) | 216 kiểm thử `pytest` trên cụm PostgreSQL 17 tạm (1 bỏ qua có chủ đích) |
+| Tách kênh + phân quyền: token Scanner không dùng ở cổng Admin, cổng Public không có API quản trị, Admin chặn header Cloudflare, Scanner không leo thang bằng HTTP thủ công | Kiểm thử tự động + `scripts/e2e_server.py` |
+| Đầu-cuối bằng tiến trình thật: 2 cổng chỉ nghe 127.0.0.1, nhập 55.005 thuốc, ESP32 mô phỏng kết nối WSS, lệnh còi `received → applied`, quét ảnh thật bằng PaddleOCR GPU (~1 s), lịch sử, `pg_dump` | `scripts/e2e_server.py` — 13/13 |
+| Ứng dụng Windows ADMIN thật (Electron) với máy chủ thật: đăng nhập, phiên mã hóa DPAPI, gửi lệnh ESP32 đến khi ACK `applied`, quét OCR camera → lưu tủ, mở lại tự khôi phục phiên, đăng xuất thu hồi phiên, máy chủ chạy độc lập | `npm run test:desktop` — 11/11 |
+| Giao diện Windows | 41 kiểm thử `vitest`, TypeScript + ESLint sạch |
+| Ứng dụng điện thoại | 100 kiểm thử Jest (chặn endpoint quản trị, làm mới phiên, lỗi mạng, màn Kết quả…), TypeScript + ESLint sạch; **ảnh chụp thật** 12 màn ở 393×852 + 6 màn × 4 kích thước khác, đăng ký và quét OCR thật — [mobile/DESIGN.md](mobile/DESIGN.md) |
+| Chuyển dữ liệu SQLite cũ → PostgreSQL (sao lưu trước, đối chiếu từng bảng) | Kiểm thử + chạy thử với dữ liệu thật vào CSDL tạm |
+| `deploy/postgres/setup-postgres.ps1` | Chạy 2 lần trên cụm tạm (`-SkipSystemChanges`): chạy lại an toàn, giữ mật khẩu, phân quyền file cấu hình đúng |
 
-### CHƯA kiểm chứng (cần bạn chạy trên máy Windows)
+### CHƯA kiểm chứng — cần chủ máy thực hiện (quyền Administrator / tài khoản bên ngoài)
 
 | Hạng mục | Ghi chú |
 |---|---|
-| **File cài đặt Windows `.exe` (NSIS)** | Không thể tạo trên Linux vì PyInstaller không biên dịch chéo. Đã có đủ script; xem mục 3. |
-| Chạy trên Windows 10/11 thật | Mã không dùng API riêng của Linux, nhưng chưa có lần chạy nào trên Windows. |
-| Webcam thật, ảnh chụp bao bì thật | Mới thử với camera giả lập và ảnh tổng hợp. **Không có số liệu độ chính xác OCR trên ảnh thật.** |
-| ESP32 thật + firmware mẫu | Lớp kết nối chỉ được thử với trình mô phỏng; `firmware/esp32_cabinet/*.ino` chưa nạp lên mạch. |
-| Thông báo Windows, khay hệ thống | Đã lập trình qua Electron `Notification`/`Tray`, chưa xem trên Windows. |
-| Đọc tiếng Việt (TTS) | Phụ thuộc giọng tiếng Việt cài trong Windows; nếu thiếu, ứng dụng báo và hướng dẫn cài. |
-| Đăng nhập Supabase | Chỉ thử với máy chủ giả lập trong kiểm thử; mặc định ứng dụng chạy hồ sơ cục bộ, **không có đăng nhập giả**. |
-| Tải mô hình OCR chính thức (`scripts/download_ocr_models.py`) | Các máy chủ mô hình bị chặn ở môi trường phát triển. Mô hình đi kèm lấy từ PyPI — xem `ocr_models/SOURCE.txt`. |
-| Engine PaddlePaddle trên máy khác | Đã chạy GPU trên Quadro P1000 (Windows 10, CUDA 11.8) cả bản mã nguồn lẫn bản đóng gói. Chưa thử card NVIDIA khác, và chưa thử bản cài trên máy không có GPU (khi đó ứng dụng tự chạy CPU, chậm — khoảng 12 giây/ảnh với mô hình medium). |
-
-Giới hạn đã biết khác: tiếng Anh mới dịch phần giao diện chính; cột `tenDuongDung` (đường dùng) trong file Excel
-để trống nên ứng dụng hiển thị "Chưa có dữ liệu"; bộ ký tự PP-OCRv6 thiếu phần lớn chữ Việt có dấu thanh nên văn
-bản OCR thô có thể mất dấu (việc so khớp không phân biệt dấu nên không ảnh hưởng).
+| Chạy `setup-postgres.ps1` trên dịch vụ PostgreSQL thật, cài dịch vụ `SmartMedicineServer`, chống ngủ | Cần mật khẩu `postgres` và quyền Administrator — [DEPLOYMENT.md](docs/DEPLOYMENT.md) bước 1, 4 |
+| Tailscale + kênh công khai (Funnel hoặc Cloudflare Tunnel) | Cần tài khoản của nhóm — bước 5, 6 |
+| Firmware ESP32 v2 | **Chưa biên dịch thử, chưa nạp lên mạch thật** (máy phát triển không được phép tải/chạy arduino-cli). Máy chủ + giao thức đã thử với trình mô phỏng. |
+| Ứng dụng điện thoại trên Android/iOS thật | Máy không có Android SDK; giao diện đã kiểm tra bằng bản web (cùng mã React Native). Chạy bằng Expo Go hoặc build APK bằng EAS. |
+| Gửi email đặt lại mật khẩu | Cần cấu hình SMTP (`SMC_SMTP_*`); khi chưa có, ứng dụng hướng dẫn liên hệ quản trị viên. |
+| Độ chính xác OCR trên ảnh bao bì thật | Mới thử với ảnh tổng hợp; chưa có số liệu trên ảnh chụp thật. |
 
 ---
 
-## 2. Chạy thử trên Windows (chế độ phát triển)
-
-Cần: **Windows 10/11 64-bit**, **Python 3.11–3.13 (64-bit)**, **Node.js ≥ 20**.
-
-```bat
-setup-windows.bat      :: tạo backend\.venv, cài thư viện Python + Node, kiểm tra mô hình OCR và file Excel
-run-dev.bat            :: mở ứng dụng (Electron + Vite + backend Python tự khởi động)
-```
-
-Hoặc chạy tay:
+## 2. Chạy thử nhanh trên một máy (không cần dịch vụ thật)
 
 ```powershell
-python -m venv backend\.venv
-backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
-npm install            # cài thư mục gốc + frontend và tải sẵn bộ chạy Electron
-npm run dev            # chế độ phát triển (hot reload)
-npm start              # build giao diện rồi chạy như bản thật
+scripts\setup-windows.ps1                                   # môi trường Python + Node (lần đầu)
+backend\.venv\Scripts\python scripts\dev_server.py          # PostgreSQL tạm + máy chủ + Admin mật khẩu ngẫu nhiên + ESP32 mô phỏng
+npm run build:frontend
+$env:SMC_SERVER_URL = "http://127.0.0.1:<cổng-admin>"; npx electron .   # đăng nhập bằng thông tin dev_server in ra
 ```
 
-Lần chạy đầu, ứng dụng tự nhập `data\DAV_unique.xlsx` vào SQLite (khoảng nửa phút, có thanh tiến trình). Những
-lần sau không đọc lại file Excel.
+Triển khai thật trên Mini PC: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
-## 3. Tạo bản cài đặt Windows
+## 3. Bản cài đặt Windows (ADMIN)
 
-```bat
-build-windows.bat
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1     # → release\SmartMedicineCabinet-Admin-Setup-2.0.0.exe
 ```
 
-Script thực hiện: cài môi trường → chạy kiểm thử → build giao diện → đóng gói backend bằng PyInstaller →
-kiểm tra đủ thành phần → electron-builder + NSIS. Kết quả:
+Từ 2.0, bản cài Windows **chỉ gồm giao diện + Electron**, không kèm backend, PostgreSQL hay mô hình OCR (máy chủ chạy
+trên Mini PC). `npm run check:resources` chặn việc vô tình đóng gói backend/CSDL hoặc chuỗi kết nối vào bản cài.
 
-```
-release\SmartMedicineCabinet-Setup-1.0.0.exe     bản cài đặt
-release\win-unpacked\SmartMedicineCabinet.exe    bản chạy thử không cần cài
-```
+## 4. Nhận diện thuốc hoạt động thế nào
 
-Tham số: `build-windows.bat -SkipTests`, `-SkipSetup`, `-DirOnly` (chỉ tạo `win-unpacked`).
-Sau khi build nên chạy `npm run test:desktop:packed` để kiểm tra bản đóng gói.
-
-Lưu ý khi build:
-
-- Lần đầu electron-builder tải NSIS và công cụ từ GitHub (cần Internet). Nếu báo lỗi
-  *"A required privilege is not held by the client"*, hãy bật **Developer Mode** của Windows hoặc mở PowerShell
-  bằng **Run as administrator**.
-- Bản cài đặt **không có chữ ký số** nên SmartScreen sẽ cảnh báo ở lần chạy đầu (*More info → Run anyway*).
-- **Engine PaddlePaddle + GPU:** nếu `backend\.venv` có cài `paddlepaddle-gpu` (lệnh cài trong
-  `backend\requirements.txt`), bước đóng gói backend tự kèm PaddlePaddle, các DLL CUDA/cuDNN cần cho suy luận và
-  mô hình PP-OCRv6 medium (định dạng Paddle). Bản cài khi đó mặc định dùng engine Paddle, chạy GPU NVIDIA nếu có,
-  không có thì tự chạy CPU (*Cài đặt → Cấu hình OCR → Thiết bị chạy*). Muốn bản nhẹ chỉ có ONNX Runtime: đặt
-  `SMC_BUNDLE_PADDLE=0` trước khi build.
-- Kích thước đo trên Windows 10 (12/11/2026):
-
-  | Bản | File cài `.exe` | Sau khi cài |
-  |---|---|---|
-  | Chỉ ONNX Runtime (CPU) | 0,27 GB | 0,7 GB |
-  | Kèm PaddlePaddle GPU + mô hình medium | 1,44 GB | 3,5 GB |
-
-  NSIS giới hạn file cài dưới 2 GB; để không vượt, chỉ các DLL CUDA dùng cho suy luận được chép
-  (xem `NVIDIA_INFERENCE_DLLS` trong `backend\smc_backend.spec`).
-- Trong bản cài đặt, người dùng **không cần cài Python** và không phải mở terminal: Electron tự khởi động
-  `resources\backend\smc-backend.exe` và dừng nó khi thoát.
-
-## 4. Dữ liệu nằm ở đâu
-
-| Nội dung | Vị trí |
-|---|---|
-| CSDL SQLite (`cabinet.db`), ảnh thuốc, bản sao lưu, bộ nhớ đệm OCR | `%APPDATA%\SmartMedicineCabinet\data\` |
-| Nhật ký backend | `%APPDATA%\SmartMedicineCabinet\logs\backend.log` |
-| Chế độ phát triển | `%APPDATA%\SmartMedicineCabinet\data-dev\` (tách khỏi dữ liệu thật) |
-| File Excel + mô hình OCR đi kèm (chỉ đọc) | `<thư mục cài đặt>\resources\data`, `resources\ocr_models` |
-
-Không có dữ liệu nào được ghi vào thư mục cài đặt. Gỡ cài đặt **không xoá** dữ liệu người dùng.
-Trong ứng dụng: *Cài đặt → Sao lưu và khôi phục → Mở thư mục dữ liệu*.
-
-## 5. Kiến trúc
-
-```
-┌──────────────────────────── Electron (desktop/) ────────────────────────────┐
-│  main.cjs      khởi động/dừng backend · cổng + token ngẫu nhiên · khay · thông báo │
-│  preload.cjs   cầu nối hẹp window.smc (IPC cố định) — renderer KHÔNG có quyền Node  │
-│  ┌──────────── Renderer: React + TypeScript (frontend/) ─────────────┐      │
-│  │ AppShell (Sidebar + Topbar cố định) → 11 trang · React Query · Zustand │      │
-│  └───────────────────────────┬───────────────────────────────────────┘      │
-└──────────────────────────────┼──────────────────────────────────────────────┘
-                 HTTP 127.0.0.1:<cổng ngẫu nhiên>  +  header X-SMC-Token
-┌──────────────────────────────▼──────────────────────────────────────────────┐
-│ FastAPI (backend/app)                                                        │
-│  api/        health · medicines · catalog · ocr · cabinet · reminders · alerts ·     │
-│              history · device · settings · profile · backup · notifications          │
-│  services/   excel_import → medicine_matcher (chuẩn hoá, FTS5, RapidFuzz)            │
-│              ocr (PaddleOCR + OpenCV, hàng đợi 1 luồng) · alerts · reminders ·       │
-│              esp32 (HTTP polling / WebSocket) · backup · auth (Supabase, tuỳ chọn)   │
-│  SQLite      danh mục 55k thuốc + FTS5 │ tủ thuốc │ lời nhắc │ cảnh báo │ lịch sử     │
-└───────────────┬──────────────────────────────────────────┬──────────────────┘
-        DAV_unique.xlsx (nhập 1 lần)                ESP32 trong mạng LAN
-        ocr_models/ (PP-OCRv6 ONNX)                 GET /api/status  hoặc  WebSocket
-```
-
-Chi tiết: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Giao thức ESP32: [docs/ESP32_PROTOCOL.md](docs/ESP32_PROTOCOL.md)
-
-## 6. Nhận diện thuốc hoạt động thế nào
-
-1. **Ảnh** từ webcam (chọn camera, lấy khung nét nhất trong 4 khung) hoặc file ảnh.
-2. **OCR**: PaddleOCR đọc ảnh gốc; chỉ khi kết quả kém mới thử tăng tương phản, xoay 90°/180°/270°, nắn nghiêng,
-   và chỉ giữ biến thể cho kết quả tốt hơn. Lưu văn bản thô, vị trí và độ tin cậy từng dòng.
+1. **Ảnh** từ camera (Windows hoặc điện thoại) hoặc thư viện ảnh → gửi lên máy chủ (điện thoại thu nhỏ ≤ 1600/2000 px).
+2. **OCR** trên Mini PC: PaddleOCR PP-OCRv6 (GPU nếu có, tự lùi CPU); chỉ thử tiền xử lý khi kết quả kém. Hàng đợi có
+   giới hạn; mỗi người dùng có giới hạn tần suất quét.
 3. **Trích xuất**: số đăng ký, hàm lượng, dạng bào chế, tên, hoạt chất (sửa lỗi OCR thường gặp như `l00 mg`, `VN-2O169-16`).
-4. **Truy xuất ứng viên** trong SQLite: theo số đăng ký, FTS5 theo từ, trigram cho chữ sai/thiếu.
-5. **Chấm điểm** bằng RapidFuzz, có giải thích từng thành phần: số đăng ký 35 %, tên 30 %, hàm lượng 20 %,
-   hoạt chất 10 %, dạng bào chế 5 %. Hàm lượng mâu thuẫn bị giới hạn điểm — *Augmentin 250 mg/31,25 mg*,
-   *500 mg/125 mg*, *875 mg/125 mg* là ba sản phẩm khác nhau.
-6. **Hiển thị tối đa 3 ứng viên** với "Mức độ phù hợp" (Cao / Trung bình / Thấp), không phải phần trăm xác suất.
+4. **Truy xuất ứng viên trong PostgreSQL bằng chỉ mục** — số đăng ký (B-tree), full-text có trọng số (tên > hoạt chất >
+   hàm lượng > dạng bào chế), `pg_trgm` cho chữ sai/thiếu, `unaccent` — chỉ lấy tập nhỏ, **không tải 55.000 bản ghi về Python**.
+5. **Chấm điểm** bằng RapidFuzz: số đăng ký 35 %, tên 30 %, hàm lượng 20 %, hoạt chất 10 %, dạng bào chế 5 %; hàm lượng
+   mâu thuẫn bị giới hạn điểm (*Augmentin 250 mg/31,25 mg*, *500 mg/125 mg*, *875 mg/125 mg* là ba sản phẩm khác nhau).
+6. **Tối đa 3 ứng viên** với “Mức độ phù hợp” (Cao / Trung bình / Thấp).
 
-Nguyên tắc an toàn được lập trình và có kiểm thử:
+**AI tìm trên mạng (Google Gemini + Google Search)** — dùng khi dữ liệu nội bộ không có câu trả lời: mã vạch/QR chưa có
+trong dữ liệu (tự động), hoặc người dùng xác nhận *“không có thuốc đúng”* trong kết quả quét (đọc ảnh + chữ OCR). Máy chủ
+thử lần lượt `gemini-3.8-flash → 3.5-flash → flash-latest → flash-lite` (quá tải thì tự chuyển, tối đa ~24 giây), chỉ trả
+thông tin **nhận dạng** (không liều dùng/chỉ định), kèm nguồn và độ tin cậy, đối chiếu lại với danh mục 55.005 thuốc, lưu
+đệm (`ai_lookups`). Mã vạch **bắt buộc tra mạng** — không có Google Search thì báo rõ, không để AI đoán. Khóa API chỉ nằm
+trong `server.env` trên Mini PC (`SMC_GEMINI_API_KEY`), không có trong ứng dụng Windows/điện thoại, không ghi nhật ký.
 
-- Không bao giờ tự lưu ứng viên đầu tiên; người dùng luôn phải bấm **Xác nhận và lưu**.
-- Khi không đủ chắc chắn, hiện đúng câu *"Chưa thể xác định chắc chắn. Vui lòng chọn đúng thuốc."* và khoá nút
-  xác nhận cho tới khi người dùng tự chọn; luôn có **Tìm thủ công** trong danh mục.
-- **Hạn dùng thực tế** của hộp thuốc do người dùng nhập (hoặc OCR gợi ý rồi người dùng xác nhận). Ngày hết hạn
-  **số đăng ký** trong Excel chỉ hiển thị để tham khảo, không bao giờ được dùng làm hạn dùng.
-- Không sinh thông tin y khoa hay liều dùng: mọi trường hiển thị đều lấy từ Excel; lời nhắc do người dùng tự đặt.
-- Chưa kết nối ESP32 thì hiện "Chưa kết nối" và dấu "–", không có số đo giả.
+**Tra mã vạch trên mạng không dùng AI** (Tavily Search, `SMC_TAVILY_API_KEY`): khi Gemini không tra được mạng, máy chủ tìm
+các trang có đúng dãy số mã vạch → số đăng ký ghi cạnh mã → thuốc trong danh mục 55.005 thuốc (thông tin lấy từ danh mục,
+không lấy từ trang web). Mã QR có ghi số đăng ký được đọc thẳng, không cần mạng hay AI.
 
-## 7. ESP32
+**Bảng màu chung** (ứng dụng Windows và điện thoại): nền #F0F7FF→#E2EEFF, thanh bên/thẻ #FFFFFF, mục chọn/nút chính/liên
+kết #0066FF, vùng camera #E6F2FF, nút phụ #F0F7FF, thẻ thông số #F0F6FF, cảnh báo #FFF3D6/#FFECB3, thành công #10B981,
+số thông báo #EF4444 — `frontend/src/styles/index.css` và `mobile/src/theme.ts`.
 
-- *Cài đặt → Kết nối thiết bị*: bật **Bật kết nối ESP32**, nhập địa chỉ IP, cổng, giao thức (HTTP polling / WebSocket),
-  bấm **Thử kết nối**, rồi **Lưu cài đặt**.
-- Giao thức JSON: [docs/ESP32_PROTOCOL.md](docs/ESP32_PROTOCOL.md). Firmware mẫu (DHT22 + còi):
-  `firmware/esp32_cabinet/esp32_cabinet.ino` — **chưa thử trên phần cứng**.
-- Thử không cần phần cứng: `python scripts\esp32_simulator.py --port 8080` rồi nhập địa chỉ `127.0.0.1`, cổng `8080`.
-  Trình mô phỏng gửi `"simulated": true` nên giao diện luôn gắn nhãn **Mô phỏng**.
+**Mã vạch** (song song với OCR): đưa mã vạch trên hộp vào khung camera của điện thoại → máy chủ tra bảng
+`medicine_catalog_barcodes` (GTIN → thuốc trong danh mục 55.005 thuốc) → mở thẳng *Chi tiết thuốc*. Mã 2D GS1 DataMatrix
+còn cho **hạn dùng và số lô** của chính hộp đó. Danh mục DAV không có mã vạch, nên dữ liệu mã vạch được **nhập từ file
+Excel/CSV của nhà thuốc** (*Cài đặt → Mã vạch thuốc* trên ứng dụng Windows): mỗi mã chỉ gắn vào thuốc **đã có** trong danh
+mục, ghép theo số đăng ký (mới/cũ, mọi cách viết), chỉ ghép theo tên + hàm lượng khi ra đúng một thuốc, khác hãng sản
+xuất thì không đoán; chạy thử trước, dòng không chắc chắn được liệt kê để xem lại. Mã chưa có → app nhắc chụp mặt hộp.
+Thử trên 500 thuốc ngẫu nhiên của danh mục thật: 469 gắn đúng, 0 gắn sai, 31 báo lại (chủ yếu dòng chỉ có tên chung như
+“Paracetamol 500mg” của hàng chục hãng). Nguồn đầy đủ hơn về sau: API *Hệ thống CSDL về Dược* của Bộ Y tế
+(`GET /master/drugs` có `packagings[].gtin` + số đăng ký) — cần tài khoản do Trung tâm Thông tin Y tế Quốc gia cấp.
 
-## 8. Kiểm thử
+**Tài khoản** (lưu trên PostgreSQL của Mini PC): *ADMIN* — toàn quyền, chỉ qua ứng dụng Windows (Tailscale); *SCANNER* —
+tài khoản tự đăng ký trên điện thoại: quét thuốc, tra cứu, xem lịch sử quét của mình, xem thuốc trong tủ và **chỉ sửa ngày
+hết hạn** (không thêm/xóa/sửa thông tin khác, không điều khiển ESP32).
+
+Nguyên tắc an toàn (có kiểm thử): không bao giờ tự lưu ứng viên; **quét trên điện thoại không thêm thuốc vào tủ**; khi
+chưa chắc chắn phải tự chọn; hạn dùng thực tế do người dùng nhập; không sinh thông tin y khoa hay liều dùng; chưa có
+ESP32 thì hiện “Chưa kết nối”, không có số đo giả; số đo từ trình mô phỏng luôn gắn nhãn **Mô phỏng**.
+
+## 5. ESP32 qua Internet
+
+Thêm thiết bị ở *Quản trị → Thiết bị* (token chỉ hiện một lần) → nạp vào `firmware/esp32_cabinet/config.h`. Lệnh
+(còi, đọc ngay, ngưỡng, còi tự động, chu kỳ) có trạng thái `pending → sent → acknowledged → applied | failed | timed_out`;
+**chỉ `applied` mới báo thành công**. Mất Internet: ESP32 vẫn tự kêu còi theo ngưỡng lưu trong NVS. Chi tiết:
+[docs/ESP32_PROTOCOL.md](docs/ESP32_PROTOCOL.md).
+
+## 6. Kiểm thử
 
 ```powershell
-npm test                    # pytest (backend) + vitest (giao diện)
-npm run lint                # ESLint + kiểm tra kiểu TypeScript
-npm run test:desktop        # Electron thật + backend thật (cần đã build giao diện: npm run build:frontend)
-npm run test:desktop:packed # kiểm tra bản đóng gói trong release\ (sau npm run pack hoặc build-windows)
+npm test                        # pytest (máy chủ, PostgreSQL tạm) + vitest (giao diện Windows)
+npm run lint                    # ESLint + TypeScript (giao diện Windows)
+npm run test:desktop            # Electron thật + máy chủ thật (cần npm run build:frontend)
+npm run test:e2e                # scripts/e2e_server.py — tiến trình thật, OCR thật
+cd mobile; npm test; npm run typecheck; npx eslint app src; node visual-check/run.mjs
 ```
 
-Kết quả gần nhất và bảng đối chiếu 15 mục kiểm thử bắt buộc: [docs/TEST_REPORT.md](docs/TEST_REPORT.md).
-Dữ liệu kiểm thử (`tests/fixtures/`) là tập con của file Excel thật và ảnh tổng hợp; ứng dụng không bao giờ nạp
-chúng làm dữ liệu thật.
+## 7. Bảo mật
 
-## 9. Bảo mật
+- Mật khẩu Argon2id; JWT 15 phút có `aud` theo kênh; refresh token ngẫu nhiên (chỉ lưu SHA-256), xoay vòng, dùng lại
+  token cũ → thu hồi mọi phiên; khóa tạm khi sai mật khẩu nhiều lần; giới hạn tần suất; nhật ký kiểm toán.
+- Quyền kiểm tra ở máy chủ bằng dependency theo từng router/endpoint; token kênh công khai chỉ mang quyền SCANNER kể cả
+  với tài khoản ADMIN; giao diện chỉ ẩn nút cho dễ dùng.
+- PostgreSQL: vai trò ứng dụng `smc_app` không phải superuser, chỉ nghe localhost; mật khẩu sinh ngẫu nhiên, lưu trong
+  `C:\ProgramData\SmartMedicineCabinet\server\server.env` (giới hạn quyền đọc). Không có mật khẩu trong mã nguồn.
+- Windows: refresh token mã hóa bằng DPAPI (`safeStorage`), không bao giờ vào renderer; renderer sandbox,
+  `contextIsolation`, CSP; không có mật khẩu CSDL trong Electron.
+- Điện thoại: refresh token trong Keystore/Keychain; mọi đường dẫn gọi máy chủ phải thuộc danh sách endpoint Scanner.
 
-- Backend chỉ nghe trên `127.0.0.1` (kể cả khi `SMC_HOST` bị đặt nhầm), cổng ngẫu nhiên mỗi lần chạy.
-- Mọi yêu cầu API phải có token ngẫu nhiên do Electron sinh ra mỗi phiên; kiểm tra `Host` chống DNS rebinding.
-- Renderer: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, CSP `script-src 'self'`;
-  chặn mở cửa sổ mới và điều hướng ra ngoài; IPC chỉ nhận từ trang của ứng dụng.
-- Không có khoá API hay mật khẩu trong mã nguồn. Supabase (tuỳ chọn) cấu hình bằng biến môi trường
-  `SUPABASE_URL`, `SUPABASE_ANON_KEY` — xem `.env.example`.
-- Không có đường dẫn tuyệt đối của máy lập trình viên trong mã nguồn.
-
-## 10. Cấu trúc thư mục
+## 8. Cấu trúc thư mục
 
 ```
-desktop/            Electron: main.cjs (tiến trình chính), preload.cjs (cầu nối an toàn)
-frontend/src/       components/ layouts/ pages/ hooks/ services/ stores/ styles/ types/ i18n/ test/
-backend/app/        api/ core/ database/ models/ schemas/ services/{ocr,medicine_matcher,excel_import,alerts,reminders,esp32}
-backend/            requirements.txt · requirements-dev.txt · smc_backend.spec (PyInstaller) · run_backend.py
-data/               DAV_unique.xlsx (danh mục thuốc gốc)
-ocr_models/         PP-OCRv6 small (ONNX) + SOURCE.txt
-scripts/            setup-windows.ps1 · build-windows.ps1 · build-backend.mjs · check-resources.mjs ·
-                    download_ocr_models.py · build_ocr_models_from_rapidocr.py · esp32_simulator.py · make_*.py
-tests/              backend/ (pytest) · desktop/smoke.mjs · fixtures/ (dữ liệu kiểm thử)
-firmware/           esp32_cabinet/esp32_cabinet.ino (mẫu)
-docs/               ARCHITECTURE.md · ESP32_PROTOCOL.md · TEST_REPORT.md · screenshots/
-assets/             icon.png · icon.ico
+backend/app/        api/ (admin_*, public, ...) auth/ iot/ database/ models/ services/ core/ cli.py server.py
+backend/migrations/ Alembic (25 bảng)
+desktop/            Electron: main.cjs (kết nối máy chủ, đăng nhập Admin), preload.cjs
+frontend/src/       giao diện Windows (pages/admin/: Thiết bị, Tài khoản, Lượt quét, Nhật ký, Máy chủ)
+mobile/             ứng dụng Expo (app/, src/) + ảnh thiết kế gốc 01-auth/ 02-main-screens/ 03-overviews/
+firmware/           esp32_cabinet/ (v2: WSS + ACK + NVS)
+deploy/             postgres/ windows/ tailscale/ cloudflare/
+scripts/            dev_server.py · e2e_server.py · esp32_simulator.py · build-windows.ps1 · download_ocr_models.py …
+tests/              backend/ (pytest) · desktop/smoke.mjs · fixtures/
+docs/               DEPLOYMENT.md · CLOUD_ARCHITECTURE.md · ESP32_PROTOCOL.md · TEST_REPORT.md · ARCHITECTURE.md (bản 1.0)
 ```
 
-## 11. Sự cố thường gặp
+## 9. Sự cố thường gặp
 
 | Hiện tượng | Cách xử lý |
 |---|---|
-| Màn hình "Không khởi động được dịch vụ nền" | Bấm **Mở thư mục nhật ký**, xem `backend.log`. Ở chế độ dev: kiểm tra đã chạy `setup-windows.bat`. |
-| "OCR chưa sẵn sàng" | Thiếu mô hình trong `ocr_models\`. Chạy `npm run models`, hoặc `backend\.venv\Scripts\python scripts\build_ocr_models_from_rapidocr.py --out ocr_models`. |
-| "Chưa có danh mục thuốc" | *Cài đặt → Dữ liệu thuốc → Chọn file Excel…* và chọn `DAV_unique.xlsx`; ứng dụng nhập ngay sau khi chọn. |
-| Không thấy camera | Windows *Settings → Privacy & security → Camera*: cho phép ứng dụng desktop dùng camera; chọn lại camera trong *Cài đặt*. |
-| Không đọc được tiếng Việt | Windows *Settings → Time & language → Speech → Add voices → Vietnamese*, rồi khởi động lại ứng dụng. |
-| ESP32 "Mất kết nối" | Máy tính và ESP32 phải cùng mạng LAN; thử mở `http://<ip-esp32>/api/status` bằng trình duyệt. |
-| `pip install` lỗi trên Python 3.14+ / 32-bit | Dùng Python 3.11–3.13 bản 64-bit. |
+| Ứng dụng Windows: “Không kết nối được máy chủ” | Bật Tailscale trên máy Windows; trên Mini PC chạy `deploy\windows\health-check.ps1`. |
+| “Đây là API công khai…” khi nhập địa chỉ ở ứng dụng Windows | Đang nhập địa chỉ công khai (`:8443` hoặc Cloudflare); ứng dụng Windows cần `https://<mini-pc>.<tailnet>.ts.net` (không có `:8443`). |
+| “Tài khoản này không có quyền quản trị” | Tài khoản SCANNER chỉ dùng ứng dụng điện thoại; đổi vai trò ở *Quản trị → Tài khoản*. |
+| Điện thoại “Không thể kết nối đến máy chủ” | Mở `<địa-chỉ-công-khai>/api/v1/health` trên trình duyệt điện thoại; trên Mini PC chạy `tailscale funnel status` (hoặc kiểm tra dịch vụ `cloudflared`) và `deploy\windows\health-check.ps1`. |
+| ESP32 “Ngoại tuyến” | Kiểm tra Wi-Fi nơi đặt tủ, `SERVER_HOST`, `DEVICE_TOKEN` (đổi token → phải nạp lại), đồng hồ NTP (TLS cần giờ đúng). |
+| “OCR chưa sẵn sàng” | Thiếu mô hình trong `ocr_models\` của Mini PC: `scripts\download_ocr_models.py`. |
 
-## 12. Lưu ý sử dụng
+## 10. Lưu ý sử dụng
 
 Đây là phần mềm phục vụ nghiên cứu, **không phải thiết bị y tế**. Thông tin thuốc lấy nguyên văn từ file danh mục;
-kết quả OCR chỉ là gợi ý và luôn cần người dùng đối chiếu với bao bì thật. Hỏi dược sĩ hoặc bác sĩ trước khi dùng thuốc.
+kết quả OCR chỉ là gợi ý và luôn cần đối chiếu với bao bì thật. Hỏi dược sĩ hoặc bác sĩ trước khi dùng thuốc.

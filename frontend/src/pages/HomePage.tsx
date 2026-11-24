@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { Bell, CalendarDays, ChevronRight, CircleAlert, CircleCheck, Droplet, Package, PlugZap, ShieldAlert, ShieldCheck, Thermometer, Unplug, type LucideIcon } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { Card, Tile } from "@/components/Card";
+import { Card } from "@/components/Card";
 import { ScanStage } from "@/components/ScanStage";
 import { IconTile, StatusIndicator, type Tone } from "@/components/StatusIndicator";
 import { SystemBanner } from "@/components/SystemBanner";
@@ -15,7 +15,8 @@ function Reading({ icon, label, value, unit, min, max, state }: { icon: LucideIc
   const t = useT();
   const out = state === "high" || state === "low";
   return (
-    <Tile className="flex flex-col items-center px-3 py-6 text-center short:py-4">
+    // (7) Thẻ thông số môi trường: #F0F6FF.
+    <div className="flex flex-col items-center rounded-tile bg-metric px-3 py-6 text-center short:py-4">
       <IconTile icon={icon} tone={out ? "danger" : "info"} size="sm" />
       <p className={clsx("mt-3 font-display text-[28px] font-extrabold leading-none tabular-nums short:text-2xl", value === null ? "text-muted/60" : out ? "text-danger" : "text-navy")}>
         {value === null ? "—" : `${value.toLocaleString("vi-VN", { maximumFractionDigits: 1 })}${unit}`}
@@ -25,7 +26,7 @@ function Reading({ icon, label, value, unit, min, max, state }: { icon: LucideIc
         {t("Ngưỡng")} {min}–{max}{unit}
         {state === "high" && ` · ${t("cao")}`}{state === "low" && ` · ${t("thấp")}`}
       </p>
-    </Tile>
+    </div>
   );
 }
 
@@ -83,7 +84,7 @@ function EnvironmentCard() {
           : data?.enabled
             ? (data.last_error ?? t("Đang chờ dữ liệu từ thiết bị"))
             : (
-              <Link to="/settings#esp32" className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline">
+              <Link to="/admin/devices" className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline">
                 <PlugZap size={14} /> {t("Thiết lập kết nối ESP32")}
               </Link>
             )}

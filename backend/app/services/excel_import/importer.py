@@ -1,9 +1,10 @@
-"""Nhập danh mục thuốc từ Excel (DAV_unique.xlsx) vào SQLite.
+"""Nhập danh mục thuốc từ Excel (DAV_unique.xlsx) vào PostgreSQL (bảng ``medicine_catalog``).
 
 Quy trình: đọc Excel theo luồng (openpyxl) → làm sạch theo lô (pandas) →
-chuẩn hóa trường tìm kiếm → upsert theo `id` → cập nhật bảng số đăng ký và
-chỉ mục FTS5. Nhập lại cùng một file không tạo bản ghi trùng; file thay đổi
-thì chỉ các dòng khác đi mới được ghi lại.
+chuẩn hóa trường tìm kiếm → upsert theo `id` → cập nhật bảng số đăng ký.
+Vector tìm kiếm toàn văn do PostgreSQL tự sinh từ các cột token (cột ``search_vector``).
+Nhập lại cùng một file không tạo bản ghi trùng; file thay đổi thì chỉ các dòng khác đi
+mới được ghi lại. Mỗi lần nhập có một dòng nhật ký trong ``catalog_imports``.
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ from typing import Any, Callable, Iterator
 
 import pandas as pd
 from openpyxl import load_workbook
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import bindparam, func, insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core import clock
 from app.database.session import Database
@@ -154,7 +156,7 @@ def _parse_id(value: str | None) -> int | None:
 
 
 def build_record(raw: dict[str, str | None]) -> dict[str, Any] | None:
-    """Dòng Excel (đã về chuỗi) → bản ghi SQLite kèm trường chuẩn hóa.
+    """Dòng Excel (đã về chuỗi) → bản ghi ``medicine_catalog`` kèm trường chuẩn hóa.
 
     Trả về None nếu dòng không dùng được (thiếu id hoặc tên thuốc).
     """
@@ -184,6 +186,7 @@ def build_record(raw: dict[str, str | None]) -> dict[str, Any] | None:
         row_hash=hashlib.sha1(hash_src.encode("utf-8")).hexdigest(),
         in_source=True,
     )
+    record.update(search_fields(record, record_regs(record)))
     return record
 
 
@@ -197,15 +200,19 @@ def record_regs(record: dict[str, Any]) -> list[tuple[str, str]]:
     return list(out.items())
 
 
-def fts_row(record: dict[str, Any], regs: list[tuple[str, str]]) -> dict[str, Any]:
+def fts_tokens(text: str) -> str:
+    """Token tìm kiếm (chỉ [a-z0-9]) cách nhau một dấu cách — đầu vào của cột ``search_vector``."""
+    return " ".join(fts_safe(text or "").split())
+
+
+def search_fields(record: dict[str, Any], regs: list[tuple[str, str]]) -> dict[str, Any]:
     ingredient = record["ingredient_norm"]
     return {
-        "rowid": record["id"],
-        "name": fts_safe(record["name_norm"]),
-        "ingredient": fts_safe(ingredient),
-        "strength": fts_safe(record["strength_norm"]),
-        "form": fts_safe(record["form_norm"]),
-        "reg": " ".join(r for r, _ in regs),
+        "fts_name": fts_tokens(record["name_norm"]),
+        "fts_ingredient": fts_tokens(ingredient),
+        "fts_strength": fts_tokens(record["strength_norm"]),
+        "fts_form": fts_tokens(record["form_norm"]),
+        "fts_reg": " ".join(dict.fromkeys(r.lower() for r, _ in regs)),
         "trgm_name": record["name_core"] or record["name_norm"],
         "trgm_ingredient": ingredient[:160],
     }
@@ -325,6 +332,7 @@ class CatalogImporter:
             imp.rows_total = result.rows_total
             imp.inserted, imp.updated, imp.unchanged = result.inserted, result.updated, result.unchanged
             imp.skipped, imp.removed, imp.duplicate_ids = result.skipped, result.removed, result.duplicate_ids
+            imp.error_rows = result.skipped
             imp.message = result.message
             imp.finished_at = clock.now()
             if result.status == "success":
@@ -339,10 +347,9 @@ class CatalogImporter:
         table = CatalogMedicine.__table__
         with self.db.engine.begin() as conn:
             existing: dict[int, str] = dict(conn.execute(select(table.c.id, table.c.row_hash)).all())
-            conn.execute(text("CREATE TEMP TABLE IF NOT EXISTS _seen_ids(id INTEGER PRIMARY KEY)"))
-            conn.execute(text("DELETE FROM _seen_ids"))
+            conn.execute(text("CREATE TEMP TABLE _seen_ids(id integer PRIMARY KEY) ON COMMIT DROP"))
             seen: set[int] = set()
-            changed_fts: dict[int, dict[str, Any]] = {}
+            changed: set[int] = set()
             changed_regs: dict[int, list[tuple[str, str]]] = {}
             header_checked = False
 
@@ -378,7 +385,7 @@ class CatalogImporter:
                     elif old_hash != record["row_hash"]:
                         record["b_id"] = med_id
                         updates.append(record)
-                        if med_id not in seen or med_id not in changed_fts:
+                        if med_id not in seen or med_id not in changed:
                             result.updated += 1
                     else:
                         if med_id not in seen:
@@ -386,18 +393,18 @@ class CatalogImporter:
                         seen.add(med_id)
                         continue
                     seen.add(med_id)
-                    regs = record_regs(record)
-                    changed_regs[med_id] = regs
-                    changed_fts[med_id] = fts_row(record, regs)
+                    changed.add(med_id)
+                    changed_regs[med_id] = record_regs(record)
 
                 if inserts:
                     conn.execute(insert(table), inserts)
                     for r in inserts:
                         existing[r["id"]] = r["row_hash"]
                 if updates:
+                    columns = [k for k in updates[0] if k not in ("id", "b_id")]
+                    stmt = update(table).where(table.c.id == bindparam("b_id")).values({c: bindparam(c) for c in columns})
+                    conn.execute(stmt, [{c: r[c] for c in columns} | {"b_id": r["b_id"]} for r in updates])
                     for r in updates:
-                        values = {k: v for k, v in r.items() if k not in ("id", "b_id")}
-                        conn.execute(update(table).where(table.c.id == r["b_id"]).values(**values))
                         existing[r["b_id"]] = r["row_hash"]
                 progress.rows_read = result.rows_total
                 notify()
@@ -411,42 +418,32 @@ class CatalogImporter:
             # Đánh dấu bản ghi đã biến mất khỏi file nguồn (không xóa vì tủ thuốc có thể đang tham chiếu).
             seen_list = list(seen)
             for i in range(0, len(seen_list), 5000):
-                conn.execute(text("INSERT OR IGNORE INTO _seen_ids(id) VALUES (:id)"), [{"id": x} for x in seen_list[i : i + 5000]])
+                conn.execute(
+                    text("INSERT INTO _seen_ids(id) VALUES (:id) ON CONFLICT DO NOTHING"),
+                    [{"id": x} for x in seen_list[i : i + 5000]],
+                )
             removed = conn.execute(
-                text("UPDATE catalog_medicines SET in_source = 0 WHERE in_source = 1 AND id NOT IN (SELECT id FROM _seen_ids)")
+                text("UPDATE medicine_catalog SET in_source = false WHERE in_source AND id NOT IN (SELECT id FROM _seen_ids)")
             ).rowcount
             conn.execute(
-                text("UPDATE catalog_medicines SET in_source = 1 WHERE in_source = 0 AND id IN (SELECT id FROM _seen_ids)")
+                text("UPDATE medicine_catalog SET in_source = true WHERE NOT in_source AND id IN (SELECT id FROM _seen_ids)")
             )
             result.removed = max(0, removed or 0)
 
-            if changed_fts:
-                ids = [{"id": i} for i in changed_fts]
+            if changed:
+                ids = list(changed)
                 for i in range(0, len(ids), 5000):
-                    part = ids[i : i + 5000]
-                    conn.execute(text("DELETE FROM catalog_fts WHERE rowid = :id"), part)
-                    conn.execute(text("DELETE FROM catalog_trgm WHERE rowid = :id"), part)
-                    conn.execute(text("DELETE FROM catalog_regs WHERE medicine_id = :id"), part)
-                rows = list(changed_fts.values())
-                for i in range(0, len(rows), 5000):
-                    part = rows[i : i + 5000]
-                    conn.execute(
-                        text("INSERT INTO catalog_fts(rowid, name, ingredient, strength, form, reg) VALUES (:rowid, :name, :ingredient, :strength, :form, :reg)"),
-                        part,
-                    )
-                    conn.execute(
-                        text("INSERT INTO catalog_trgm(rowid, name, ingredient) VALUES (:rowid, :trgm_name, :trgm_ingredient)"),
-                        part,
-                    )
+                    conn.execute(text("DELETE FROM medicine_catalog_regs WHERE medicine_id = ANY(:ids)"), {"ids": ids[i : i + 5000]})
                 reg_rows = [
                     {"reg_norm": reg, "medicine_id": med_id, "kind": kind}
                     for med_id, regs in changed_regs.items()
                     for reg, kind in regs
                 ]
-                reg_table = CatalogReg.__table__
+                reg_stmt = pg_insert(CatalogReg.__table__).on_conflict_do_nothing()
                 for i in range(0, len(reg_rows), 5000):
-                    conn.execute(insert(reg_table).prefix_with("OR IGNORE"), reg_rows[i : i + 5000])
-                if len(rows) > 2000:
-                    conn.execute(text("INSERT INTO catalog_fts(catalog_fts) VALUES ('optimize')"))
-                    conn.execute(text("INSERT INTO catalog_trgm(catalog_trgm) VALUES ('optimize')"))
-            conn.execute(text("DROP TABLE IF EXISTS _seen_ids"))
+                    conn.execute(reg_stmt, reg_rows[i : i + 5000])
+        if changed:
+            with self.db.engine.connect() as conn:  # cập nhật thống kê cho bộ lập kế hoạch truy vấn
+                conn.execute(text("ANALYZE medicine_catalog"))
+                conn.execute(text("ANALYZE medicine_catalog_regs"))
+                conn.commit()

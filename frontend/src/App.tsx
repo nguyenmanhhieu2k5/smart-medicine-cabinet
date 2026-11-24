@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { BackendGate } from "@/components/BackendGate";
 import { AppShell } from "@/layouts/AppShell";
+import { AdminPage } from "@/pages/AdminPage";
 import { AlertsPage } from "@/pages/AlertsPage";
 import { CabinetPage } from "@/pages/CabinetPage";
 import { ExpiryPage } from "@/pages/ExpiryPage";
@@ -34,6 +35,8 @@ export function AppRoutes() {
         <Route path="history" element={<HistoryPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="admin" element={<Navigate to="/admin/devices" replace />} />
+        <Route path="admin/:tab" element={<AdminPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

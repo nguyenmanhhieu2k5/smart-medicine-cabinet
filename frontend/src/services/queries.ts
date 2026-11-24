@@ -20,9 +20,23 @@ export const keys = {
   settings: ["settings"] as const,
   profile: ["profile"] as const,
   catalog: ["catalog"] as const,
+  barcodes: ["catalog", "barcodes"] as const,
+  aiStatus: ["ai", "status"] as const,
   ocrJob: (id: string) => ["ocr", "job", id] as const,
   ocrStatus: ["ocr", "status"] as const,
   backups: ["backups"] as const,
+  // Quản trị
+  devices: ["devices"] as const,
+  deviceActions: ["devices", "actions"] as const,
+  deviceCommands: (id: string) => ["devices", id, "commands"] as const,
+  deviceTelemetry: (id: string, hours: number) => ["devices", id, "telemetry", hours] as const,
+  deviceDetail: (id: string) => ["devices", id, "detail"] as const,
+  command: (id: string) => ["command", id] as const,
+  users: (params: object) => ["users", params] as const,
+  user: (id: string) => ["users", "detail", id] as const,
+  audit: (params: object) => ["audit", params] as const,
+  adminScans: (params: object) => ["admin-scans", params] as const,
+  system: ["system"] as const,
 };
 
 export function errorMessage(error: unknown): string {
@@ -97,6 +111,14 @@ export function useCatalogStatus() {
     queryFn: api.catalogStatus,
     refetchInterval: (query) => (query.state.data?.progress.running ? 700 : 30_000),
   });
+}
+
+export function useAiStatus() {
+  return useQuery({ queryKey: keys.aiStatus, queryFn: api.aiStatus, refetchInterval: 60_000 });
+}
+
+export function useBarcodeStatus() {
+  return useQuery({ queryKey: keys.barcodes, queryFn: api.barcodeStatus });
 }
 
 // ---- Tủ thuốc ---------------------------------------------------------------- //
@@ -199,4 +221,64 @@ export function useOcrJob(id: string | null) {
 
 export function useBackups() {
   return useQuery({ queryKey: keys.backups, queryFn: api.backups });
+}
+
+// ---- Quản trị: thiết bị, lệnh, tài khoản, nhật ký, máy chủ ----------------------- //
+export function useDevices() {
+  return useQuery({ queryKey: keys.devices, queryFn: api.devices, refetchInterval: 5000 });
+}
+
+export function useDeviceDetail(id: string | null) {
+  return useQuery({ queryKey: keys.deviceDetail(id ?? ""), queryFn: () => api.deviceDetail(id as string), enabled: Boolean(id), refetchInterval: 5000 });
+}
+
+export function useDeviceActions() {
+  return useQuery({ queryKey: keys.deviceActions, queryFn: api.deviceActions, staleTime: 5 * 60_000 });
+}
+
+export function useDeviceCommands(id: string | null) {
+  return useQuery({
+    queryKey: keys.deviceCommands(id ?? ""),
+    queryFn: () => api.deviceCommands(id as string),
+    enabled: Boolean(id),
+    // Còn lệnh chưa kết thúc → hỏi nhanh để thấy ACK ngay; không thì thưa hơn.
+    refetchInterval: (query) => (query.state.data?.items.some((c) => !c.final) ? 1000 : 10_000),
+  });
+}
+
+export function useCommand(id: string | null) {
+  return useQuery({
+    queryKey: keys.command(id ?? ""),
+    queryFn: () => api.command(id as string),
+    enabled: Boolean(id),
+    retry: false,
+    refetchInterval: (query) => (query.state.data?.final || query.state.error ? false : 700),
+  });
+}
+
+export function useDeviceTelemetry(id: string | null, hours = 24) {
+  return useQuery({
+    queryKey: keys.deviceTelemetry(id ?? "", hours), queryFn: () => api.deviceTelemetry(id as string, hours),
+    enabled: Boolean(id), refetchInterval: 60_000,
+  });
+}
+
+export function useUsers(params: { q?: string; role?: string; limit?: number; offset?: number }) {
+  return useQuery({ queryKey: keys.users(params), queryFn: () => api.users(params), placeholderData: keepPreviousData });
+}
+
+export function useUserDetail(id: string | null) {
+  return useQuery({ queryKey: keys.user(id ?? ""), queryFn: () => api.user(id as string), enabled: Boolean(id) });
+}
+
+export function useAudit(params: { q?: string; action?: string; success?: boolean; limit?: number; offset?: number }) {
+  return useQuery({ queryKey: keys.audit(params), queryFn: () => api.audit(params), placeholderData: keepPreviousData, refetchInterval: 15_000 });
+}
+
+export function useAdminScans(params: { q?: string; user_id?: string; limit?: number; offset?: number }) {
+  return useQuery({ queryKey: keys.adminScans(params), queryFn: () => api.adminScans(params), placeholderData: keepPreviousData, refetchInterval: 15_000 });
+}
+
+export function useSystem() {
+  return useQuery({ queryKey: keys.system, queryFn: api.system, refetchInterval: 10_000 });
 }

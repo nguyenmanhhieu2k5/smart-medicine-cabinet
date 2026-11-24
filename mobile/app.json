@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "Tủ thuốc thông minh",
+    "slug": "smart-medicine-cabinet",
+    "scheme": "smartmedicine",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F8F8F7",
+    "ios": {
+      "bundleIdentifier": "vn.smartmedicinecabinet.scanner",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ứng dụng dùng camera để chụp hộp hoặc vỉ thuốc và nhận diện tên thuốc.",
+        "NSPhotoLibraryUsageDescription": "Ứng dụng đọc ảnh bạn chọn để nhận diện tên thuốc."
+      }
+    },
+    "android": {
+      "package": "vn.smartmedicinecabinet.scanner",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0878F9"
+      },
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-image",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 120,
+          "backgroundColor": "#F8F8F7"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Ứng dụng dùng camera để chụp hộp hoặc vỉ thuốc và nhận diện tên thuốc.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Ứng dụng đọc ảnh bạn chọn để nhận diện tên thuốc.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "apiUrl": "https://desktop-rt32kff.tail43c7d5.ts.net:8443"
+    }
+  }
+}

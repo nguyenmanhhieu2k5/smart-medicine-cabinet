@@ -26,3 +26,17 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+# Firmware: thông tin Wi-Fi + token thiết bị thật (chỉ đưa config.example.h lên kho mã)
+firmware/esp32_cabinet/config.h
+
+# Cụm PostgreSQL tạm cho phát triển
+.devdb/
+
+# Ứng dụng di động: bản web dùng để chụp kiểm tra giao diện + ảnh chụp
+mobile/dist-web/
+mobile/visual-check/output/
+mobile/.expo/
+
+# Ảnh mã vạch/QR dùng để quét thử (tạo lại được)
+ma-thu/

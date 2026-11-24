@@ -73,9 +73,9 @@ def test_missing_data_and_placeholders_are_handled(db):
 
 def test_medicine_with_multiple_registration_numbers(db):
     with db.session() as s:
-        regs = dict(s.execute(text("SELECT reg_norm, kind FROM catalog_regs WHERE medicine_id = :i"), {"i": FOGICAP_40}).all())
+        regs = dict(s.execute(text("SELECT reg_norm, kind FROM medicine_catalog_regs WHERE medicine_id = :i"), {"i": FOGICAP_40}).all())
         assert regs == {"893110205525": "current", "VD3470320": "old"}
-        both = s.execute(text("SELECT COUNT(*) FROM catalog_regs WHERE reg_norm LIKE '8931%' AND medicine_id IN (SELECT medicine_id FROM catalog_regs GROUP BY medicine_id HAVING COUNT(*) > 2)")).scalar()
+        both = s.execute(text("SELECT COUNT(*) FROM medicine_catalog_regs WHERE reg_norm LIKE '8931%' AND medicine_id IN (SELECT medicine_id FROM medicine_catalog_regs GROUP BY medicine_id HAVING COUNT(*) > 2)")).scalar()
         assert both >= 0
 
 
@@ -112,18 +112,24 @@ def test_api_import_runs_in_background_and_reports_status(client, tmp_path):
 
 
 @pytest.mark.realdata
-def test_full_excel_imports_all_55005_rows(tmp_path):
+def test_full_excel_imports_all_55005_rows(empty_db):
+    """Nhập toàn bộ DAV_unique.xlsx vào PostgreSQL; nhập lại không tạo bản ghi trùng."""
     if not FULL_XLSX.is_file():
         pytest.skip("Không có data/DAV_unique.xlsx")
-    from app.database.session import Database
-
-    database = Database(tmp_path / "full.db")
-    database.create_all()
-    result = CatalogImporter(database).run(FULL_XLSX)
+    result = CatalogImporter(empty_db).run(FULL_XLSX)
     assert result.status == "success" and result.rows_total == 55005 and result.inserted == 55005
     assert result.missing_columns == [] and result.skipped == 0
-    with database.session() as s:
+    with empty_db.session() as s:
         repo = CatalogRepository(s)
         assert repo.count() == 55005
         assert repo.search("VN-20169-16")["items"][0]["id"] == AUGMENTIN_625
-    database.dispose()
+        # Truy vấn ứng viên dùng chỉ mục GIN, không quét toàn bảng.
+        plan = "\n".join(r[0] for r in s.execute(text(
+            "EXPLAIN SELECT id FROM medicine_catalog WHERE search_vector @@ CAST('augmentin:A' AS tsquery)")).all())
+        assert "ix_medicine_catalog_search" in plan
+        log = s.scalar(text("SELECT rows_total FROM catalog_imports WHERE status = 'success' ORDER BY id DESC LIMIT 1"))
+        assert log == 55005
+    again = CatalogImporter(empty_db).run(FULL_XLSX, force=True)
+    assert again.status == "success" and again.inserted == 0 and again.unchanged == 55005
+    with empty_db.session() as s:
+        assert CatalogRepository(s).count() == 55005

@@ -11,6 +11,8 @@ const TONES: Record<Tone, string> = {
   info: "bg-primary-soft text-primary",
   neutral: "bg-tile text-muted",
 };
+// Nhãn dạng viên thuốc: nhãn cảnh báo dùng #FFECB3 (đậm hơn nền biểu tượng #FFF3D6) như thẻ Cảnh báo (8).
+const PILL_TONES: Record<Tone, string> = { ...TONES, warning: "bg-warning-label text-warning-ink" };
 const DOTS: Record<Tone, string> = {
   success: "bg-success", warning: "bg-warning", danger: "bg-danger", info: "bg-primary", neutral: "bg-muted/60",
 };
@@ -31,7 +33,7 @@ export function StatusIndicator({ tone = "neutral", icon: Icon, dot = false, siz
       className={clsx(
         "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-semibold",
         size === "sm" ? "px-2.5 py-1 text-[12px]" : "px-3 py-1.5 text-[13px]",
-        TONES[tone], className,
+        PILL_TONES[tone], className,
       )}
     >
       {Icon && <Icon size={size === "sm" ? 13 : 15} strokeWidth={2.2} />}

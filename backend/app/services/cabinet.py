@@ -80,3 +80,19 @@ def serialize_item(item: CabinetItem, warning_days: int, low_stock_default: floa
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat(),
     }
+
+
+def log_inventory(
+    session, item: CabinetItem, action: str, before: float | None, after: float | None, *,
+    user_id=None, note: str | None = None,
+) -> None:
+    """Ghi một dòng vào medicine_inventory_logs (gọi TRƯỚC khi xóa thuốc để còn id)."""
+    from app.core import clock
+    from app.models import InventoryLog
+
+    delta = None if before is None or after is None else round(after - before, 3)
+    session.add(InventoryLog(
+        cabinet_medicine_id=item.id, medicine_name=item.name, action=action, quantity_before=before,
+        quantity_after=after, delta=delta, unit=item.unit, note=(note or None) and note[:500], user_id=user_id,
+        created_at=clock.now(),
+    ))

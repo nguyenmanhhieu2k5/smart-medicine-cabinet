@@ -1,4 +1,4 @@
-import { Activity, Bell, CalendarDays, ChevronRight, Database, Pencil, Plus, ScanLine, Settings, Trash2, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Activity, Bell, CalendarDays, Cpu, ChevronRight, Database, Pencil, Plus, ScanLine, Settings, Trash2, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -23,7 +23,7 @@ const ICONS: Record<string, LucideIcon> = {
   cabinet_add: Plus, cabinet_update: Pencil, cabinet_delete: Trash2, quantity_change: Pencil,
   catalog_import: Database, backup_created: Database, backup_restored: Database,
 };
-const GROUP_ICONS: Record<HistoryGroup, LucideIcon> = { scan: ScanLine, cabinet: Pencil, reminder: Bell, alert: TriangleAlert, system: Settings };
+const GROUP_ICONS: Record<HistoryGroup, LucideIcon> = { scan: ScanLine, cabinet: Pencil, reminder: Bell, alert: TriangleAlert, system: Settings, device: Cpu };
 const DATA_LABELS: Record<string, string> = {
   job_id: "Mã lần quét", source: "Nguồn ảnh", status: "Kết quả", lines: "Số dòng chữ", top_id: "Mã bản ghi danh mục",
   cabinet_item_id: "Mã thuốc trong tủ", catalog_id: "Mã bản ghi danh mục", quantity: "Số lượng", from: "Từ", to: "Thành",
@@ -81,7 +81,7 @@ export function HistoryPage() {
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   usePageHeader(t("Lịch sử"), t("Các hoạt động nhận diện và quản lý thuốc"), `${t("Tủ thuốc thông minh")} / ${t("Lịch sử")}`);
-  const initialGroup = (["scan", "cabinet", "reminder", "alert", "system"] as const).find((g) => g === params.get("group")) ?? "all";
+  const initialGroup = (["scan", "cabinet", "reminder", "alert", "device", "system"] as const).find((g) => g === params.get("group")) ?? "all";
   const [group, setGroup] = useState<Filter>(initialGroup);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -127,7 +127,7 @@ export function HistoryPage() {
           size="sm" value={group} onChange={changeGroup}
           options={[
             { value: "all", label: t("Tất cả") }, { value: "scan", label: t("Quét thuốc") }, { value: "cabinet", label: t("Quản lý thuốc") },
-            { value: "reminder", label: t("Nhắc uống") }, { value: "alert", label: t("Cảnh báo") }, { value: "system", label: t("Hệ thống") },
+            { value: "reminder", label: t("Nhắc uống") }, { value: "alert", label: t("Cảnh báo") }, { value: "device", label: t("Thiết bị") }, { value: "system", label: t("Hệ thống") },
           ]}
         />
         <div className="flex flex-wrap items-center gap-2.5">

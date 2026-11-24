@@ -194,4 +194,14 @@ export const en: Record<string, string> = {
   "Tải về": "Download", "Chưa có bản sao lưu nào.": "No backups yet.", "Lưu cài đặt": "Save settings", "Lưu cài đặt ({count})": "Save settings ({count})",
   "Hủy thay đổi": "Discard changes", "Đã lưu cài đặt": "Settings saved",
   "Nội dung do hệ thống sinh ra (cảnh báo, lịch sử) luôn là tiếng Việt.": "System-generated content (alerts, history) and some detailed notes stay in Vietnamese.",
+  // Mã vạch
+  "Mã vạch thuốc": "Medicine barcodes", "Chưa có mã vạch": "No barcodes yet", "{count} mã · {medicines} thuốc": "{count} codes · {medicines} medicines",
+  "Nhập file mã vạch": "Import barcode file", "Chọn file…": "Choose file…", "Tra một mã vạch": "Look up a barcode", "Tra": "Look up",
+  "Mã vạch cần tra": "Barcode to look up", "Gỡ liên kết": "Unlink", "Gỡ liên kết mã vạch?": "Unlink this barcode?",
+  "Cột đã nhận": "Detected columns", "Dòng khớp danh mục": "Rows matched to catalog", "Theo số đăng ký / theo tên": "By registration / by name",
+  "Mã sẽ gắn mới": "New codes to link", "Mã đã có sẵn": "Already linked", "Cần xem lại": "Needs review", "Mã lỗi / nội bộ": "Invalid / internal codes",
+  "Xung đột": "Conflicts", "Thuốc trong danh mục": "Medicines in catalog", "Nhập {count} mã vạch": "Import {count} barcodes",
+  "Nhiều thuốc khớp": "Several matches", "Không có trong danh mục": "Not in catalog", "Mã không hợp lệ": "Invalid code", "Mã nội bộ": "Internal code",
+  "Dòng": "Row", "Thuốc trong file": "Medicine in file", "Vấn đề": "Issue", "Đã gắn mã vạch": "Barcodes linked",
+  "ghép theo số đăng ký": "matched by registration number", "ghép theo tên + hàm lượng": "matched by name + strength",
 };

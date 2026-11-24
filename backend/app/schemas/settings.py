@@ -36,16 +36,6 @@ class AppSettings(BaseModel):
     expiry_warning_days: int = Field(30, ge=1, le=365)
     low_stock_threshold: float = Field(5.0, ge=0, le=100000)
 
-    # --- ESP32 ---
-    esp32_enabled: bool = False
-    esp32_mode: Literal["http", "websocket"] = "http"
-    esp32_host: str = Field("", max_length=255)
-    esp32_port: int = Field(80, ge=1, le=65535)
-    esp32_path: str = Field("/api/status", max_length=200)
-    esp32_poll_seconds: int = Field(5, ge=1, le=600)
-    esp32_timeout_seconds: float = Field(3.0, ge=0.5, le=30)
-    esp32_stale_seconds: int = Field(30, ge=5, le=3600)
-    esp32_token: str | None = Field(None, max_length=200)
 
     # --- OCR ---
     ocr_engine: OcrEngineName = Field(default_factory=_default_ocr_engine)
@@ -104,15 +94,6 @@ class SettingsPatch(BaseModel):
     humidity_max: float | None = None
     expiry_warning_days: int | None = None
     low_stock_threshold: float | None = None
-    esp32_enabled: bool | None = None
-    esp32_mode: Literal["http", "websocket"] | None = None
-    esp32_host: str | None = None
-    esp32_port: int | None = None
-    esp32_path: str | None = None
-    esp32_poll_seconds: int | None = None
-    esp32_timeout_seconds: float | None = None
-    esp32_stale_seconds: int | None = None
-    esp32_token: str | None = None
     ocr_engine: OcrEngineName | None = None
     ocr_profile: OcrProfileName | None = None
     ocr_device: OcrDeviceName | None = None

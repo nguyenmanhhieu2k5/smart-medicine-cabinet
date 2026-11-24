@@ -6,6 +6,7 @@ song quá mức. Kết quả không bao giờ được tự động lưu vào t�
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
@@ -17,19 +18,57 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
+from sqlalchemy import select
 
 from app.core import clock
-from app.database.session import Database
+from app.database.session import Database, iso_local
+from app.models import OcrCandidateRecord, OcrJobRecord, OcrResultRecord, ScanHistory
 from app.schemas.settings import AppSettings
 from app.services import history, settings_store
 from app.services.alerts import engine as alert_engine
 from app.services.medicine_matcher.catalog import CatalogRepository
 from app.services.medicine_matcher.matcher import MedicineMatcher, OcrLine
+from app.services.medicine_matcher.normalize import normalize_text
 from app.services.ocr import preprocess
 from app.services.ocr.engine import OcrConfig, OcrEngine, OcrEngineError, OcrOutput, PaddleOcrEngine
 from app.services.ocr.expiry import extract_expiry
 
 log = logging.getLogger("smc.ocr")
+
+
+class OcrBusy(Exception):
+    """Hàng đợi OCR đầy hoặc người dùng đang có quá nhiều ảnh chờ xử lý."""
+
+    def __init__(self, message: str, status_code: int = 503):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+ACTIVE_STATUSES = ("queued", "preprocessing", "recognizing", "matching")
+# Bốn bước hiển thị trên màn hình "Đang xử lý ảnh" của ứng dụng di động.
+STAGES = (
+    ("image", "Xử lý hình ảnh"),
+    ("ocr", "Nhận dạng văn bản (OCR)"),
+    ("lookup", "Tra cứu trong cơ sở dữ liệu"),
+    ("summary", "Tổng hợp kết quả"),
+)
+_STAGE_OF_STATUS = {"queued": 0, "preprocessing": 0, "recognizing": 1, "matching": 2, "done": 4}
+
+
+def stage_list(status: str) -> list[dict[str, str]]:
+    active = _STAGE_OF_STATUS.get(status, -1)
+    out = []
+    for i, (key, label) in enumerate(STAGES):
+        if status in ("error", "cancelled"):
+            state = "failed" if i == max(0, min(3, _STAGE_OF_STATUS.get(status, 0))) else "pending"
+        else:
+            state = "done" if i < active else "active" if i == active else "pending"
+        out.append({"key": key, "label": label, "state": state})
+    return out
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, default=str, ensure_ascii=False))
 
 MAX_JOBS_KEPT = 20
 JOB_TTL = timedelta(hours=6)
@@ -63,6 +102,10 @@ class OcrJob:
     result: dict[str, Any] | None = None
     error: str | None = None
     crop: Sequence[float] | None = None
+    user_id: uuid.UUID | None = None
+    channel: str = "admin"
+    thumb_path: Path | None = None
+    cancel_requested: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -71,6 +114,7 @@ class OcrJob:
             "status": self.status,
             "progress": self.progress,
             "message": self.message,
+            "stages": stage_list(self.status),
             "created_at": self.created_at.isoformat(),
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "has_image": bool(self.image_path and self.image_path.exists()),
@@ -151,8 +195,14 @@ class OcrService:
         model_roots: list[Path],
         engine_factory: Callable[[OcrConfig], OcrEngine] | None = None,
         enabled: bool = True,
+        scans_dir: Path | None = None,
+        max_queue: int = 16,
+        max_active_per_user: int = 2,
     ):
         self.db = db
+        self.scans_dir = scans_dir or (uploads_dir.parent / "scans")
+        self.max_queue = max_queue
+        self.max_active_per_user = max_active_per_user
         self.uploads_dir = uploads_dir
         self.cache_dir = cache_dir
         self.model_roots = model_roots
@@ -234,28 +284,124 @@ class OcrService:
         threading.Thread(target=_run, name="ocr-warmup", daemon=True).start()
 
     # ---- công việc -------------------------------------------------------- #
-    def submit(self, data: bytes, source: str = "upload", crop: Sequence[float] | None = None) -> OcrJob:
+    def submit(
+        self, data: bytes, source: str = "upload", crop: Sequence[float] | None = None, *,
+        user_id: uuid.UUID | None = None, channel: str = "admin", actor: str | None = None,
+    ) -> OcrJob:
+        with self._lock:
+            active = [j for j in self._jobs.values() if j.status in ACTIVE_STATUSES]
+        if len(active) >= self.max_queue:
+            raise OcrBusy("Máy chủ đang bận nhận diện nhiều ảnh. Vui lòng thử lại sau ít phút.", 503)
+        if user_id is not None and sum(1 for j in active if j.user_id == user_id) >= self.max_active_per_user:
+            raise OcrBusy("Bạn đang có ảnh chờ nhận diện. Vui lòng đợi kết quả trước khi quét tiếp.", 429)
         image = preprocess.decode_image(data)  # ném ImageError nếu không phải ảnh
-        job = OcrJob(id=uuid.uuid4().hex[:16], source=source, crop=crop)
+        job = OcrJob(id=str(uuid.uuid4()), source=source, crop=crop, user_id=user_id, channel=channel)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         image = preprocess.crop_relative(preprocess.limit_size(image), crop)
         job.image_path = self.uploads_dir / f"scan_{job.id}.jpg"
         job.image_path.write_bytes(preprocess.encode_jpeg(image))
+        if user_id is not None:
+            # Ảnh thu nhỏ cho lịch sử quét (xóa theo chính sách lưu giữ).
+            self.scans_dir.mkdir(parents=True, exist_ok=True)
+            job.thumb_path = self.scans_dir / f"{job.id}_thumb.jpg"
+            job.thumb_path.write_bytes(preprocess.encode_jpeg(preprocess.limit_size(image, 360), quality=80))
+        with self.db.session() as s:
+            s.add(OcrJobRecord(
+                id=uuid.UUID(job.id), user_id=user_id, channel=channel, source=source, status="queued", progress=0,
+                message=job.message, image_path=str(job.image_path), thumb_path=str(job.thumb_path) if job.thumb_path else None,
+                image_width=int(image.shape[1]), image_height=int(image.shape[0]), created_at=job.created_at,
+            ))
+            origin = "Ứng dụng di động" if channel == "public" else ("Chụp từ camera" if source == "camera" else "Chọn ảnh từ máy tính")
+            history.record(
+                s, "scan", "scan", "Quét thuốc", origin + (f" · {actor}" if actor and channel == "public" else ""),
+                {"job_id": job.id, "source": source, "channel": channel},
+            )
         with self._lock:
             self._jobs[job.id] = job
         self._cleanup()
         self._ensure_worker()
         self._queue.put(job.id)
-        with self.db.session() as s:
-            history.record(
-                s, "scan", "scan", "Quét thuốc",
-                "Chụp từ camera" if source == "camera" else "Chọn ảnh từ máy tính",
-                {"job_id": job.id, "source": source},
-            )
         return job
 
     def get(self, job_id: str) -> OcrJob | None:
         return self._jobs.get(job_id)
+
+    def load(self, job_id: str, *, user_id: uuid.UUID | None = None) -> dict[str, Any] | None:
+        """Trạng thái/kết quả của một lượt quét (bộ nhớ hoặc CSDL). Lọc theo chủ sở hữu nếu có user_id."""
+        job = self._jobs.get(job_id)
+        if job is not None:
+            if user_id is not None and job.user_id != user_id:
+                return None
+            return job.public()
+        try:
+            jid = uuid.UUID(job_id)
+        except ValueError:
+            return None
+        with self.db.session() as s:
+            rec = s.get(OcrJobRecord, jid)
+            if rec is None or (user_id is not None and rec.user_id != user_id):
+                return None
+            result = s.get(OcrResultRecord, jid)
+            status = "error" if rec.status == "error" else rec.status
+            return {
+                "id": str(rec.id), "source": rec.source, "status": status, "progress": rec.progress,
+                "message": rec.message or "", "stages": stage_list(status),
+                "created_at": rec.created_at.isoformat(),
+                "finished_at": rec.finished_at.isoformat() if rec.finished_at else None,
+                "has_image": bool(rec.image_path and Path(rec.image_path).exists()),
+                "result": result.payload if result else None, "error": rec.error,
+            }
+
+    def ai_material(self, job_id: str, *, user_id: uuid.UUID | None = None) -> tuple[bytes | None, str] | None:
+        """Ảnh (gốc nếu còn, không thì ảnh thu nhỏ) + chữ OCR của một lượt quét — để AI tra cứu khi danh mục không có."""
+        try:
+            jid = uuid.UUID(job_id)
+        except ValueError:
+            return None
+        with self.db.session() as s:
+            rec = s.get(OcrJobRecord, jid)
+            if rec is None or (user_id is not None and rec.user_id != user_id):
+                return None
+            result = s.get(OcrResultRecord, jid)
+            text = (result.raw_text if result else "") or ""
+            image = None
+            for candidate in (rec.image_path, rec.thumb_path):
+                if candidate and Path(candidate).is_file():
+                    image = Path(candidate).read_bytes()
+                    break
+            return image, text
+
+    def thumbnail(self, job_id: str, *, user_id: uuid.UUID | None = None) -> Path | None:
+        try:
+            jid = uuid.UUID(job_id)
+        except ValueError:
+            return None
+        with self.db.session() as s:
+            rec = s.get(OcrJobRecord, jid)
+            if rec is None or (user_id is not None and rec.user_id != user_id) or not rec.thumb_path:
+                return None
+            path = Path(rec.thumb_path)
+            return path if path.is_file() else None
+
+    def cancel(self, job_id: str, *, user_id: uuid.UUID | None = None) -> bool:
+        job = self._jobs.get(job_id)
+        if job is None or (user_id is not None and job.user_id != user_id) or job.status not in ACTIVE_STATUSES:
+            return False
+        job.cancel_requested = True
+        if job.status == "queued":
+            self._finish_cancelled(job)
+        return True
+
+    def _finish_cancelled(self, job: OcrJob) -> None:
+        job.status, job.message, job.progress, job.finished_at = "cancelled", "Đã hủy", 100, clock.now()
+        job.result = None
+        try:
+            with self.db.session() as s:
+                rec = s.get(OcrJobRecord, uuid.UUID(job.id))
+                if rec is not None:
+                    rec.status, rec.message, rec.progress, rec.finished_at = "cancelled", job.message, 100, job.finished_at
+        except Exception:  # noqa: BLE001
+            log.exception("Không ghi được trạng thái hủy của lượt quét %s", job.id)
 
     def _ensure_worker(self) -> None:
         if self._worker is None or not self._worker.is_alive():
@@ -268,7 +414,7 @@ class OcrService:
             if job_id is None:
                 return
             job = self._jobs.get(job_id)
-            if job is None:
+            if job is None or job.status == "cancelled":
                 continue
             try:
                 self._process(job)
@@ -277,7 +423,18 @@ class OcrService:
                 self._fail(job, str(exc) if isinstance(exc, (OcrEngineError, preprocess.ImageError)) else f"Lỗi không mong muốn: {exc}")
 
     def _update(self, job: OcrJob, status: str, progress: int, message: str) -> None:
+        changed = job.status != status
         job.status, job.progress, job.message = status, progress, message
+        if changed:  # chỉ ghi CSDL khi đổi bước (không ghi mỗi lần cập nhật phần trăm)
+            try:
+                with self.db.session() as s:
+                    rec = s.get(OcrJobRecord, uuid.UUID(job.id))
+                    if rec is not None:
+                        rec.status, rec.progress, rec.message = status, progress, message
+                        if status == "preprocessing" and rec.started_at is None:
+                            rec.started_at = clock.now()
+            except Exception:  # noqa: BLE001
+                log.exception("Không cập nhật được trạng thái lượt quét %s", job.id)
 
     def _fail(self, job: OcrJob, message: str) -> None:
         job.status, job.error, job.message, job.progress = "error", message, "Nhận diện thất bại", 100
@@ -286,6 +443,14 @@ class OcrService:
             with self.db.session() as s:
                 alert_engine.raise_system(s, "ocr_error", message)
                 history.record(s, "scan", "ocr_failed", "OCR gặp lỗi", message, {"job_id": job.id})
+                rec = s.get(OcrJobRecord, uuid.UUID(job.id))
+                if rec is not None:
+                    rec.status, rec.error, rec.message, rec.progress, rec.finished_at = "error", message, job.message, 100, job.finished_at
+                if job.user_id is not None:
+                    s.add(ScanHistory(
+                        user_id=job.user_id, job_id=uuid.UUID(job.id), status="failed", title="Nhận diện thất bại",
+                        subtitle=message[:200], candidate_count=0, search_text="", created_at=job.created_at,
+                    ))
         except Exception:
             log.exception("Không ghi được lỗi OCR")
 
@@ -349,8 +514,55 @@ class OcrService:
             "match": match,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
         }
-        self._update(job, "done", 100, "Hoàn tất")
+        if job.cancel_requested:
+            self._finish_cancelled(job)
+            return
         job.finished_at = clock.now()
+        self._persist_result(job)
+        self._update(job, "done", 100, "Hoàn tất")
+
+    def _persist_result(self, job: OcrJob) -> None:
+        result = job.result or {}
+        match = result.get("match") or {}
+        candidates = (match.get("candidates") or [])[:3]
+        now = clock.now()
+        try:
+            with self.db.session() as s:
+                rec = s.get(OcrJobRecord, uuid.UUID(job.id))
+                if rec is not None:
+                    rec.finished_at = job.finished_at
+                ocr = result.get("ocr") or {}
+                s.add(OcrResultRecord(
+                    job_id=uuid.UUID(job.id), raw_text="\n".join(ln["text"] for ln in ocr.get("lines", [])),
+                    lines=_json_safe(ocr.get("lines", [])), line_count=int(ocr.get("line_count") or 0),
+                    mean_score=ocr.get("mean_score"), preprocess=(ocr.get("preprocess") or "")[:64] or None,
+                    engine=_json_safe(ocr.get("engine")), image_info=_json_safe(result.get("image")),
+                    expiry_suggestion=_json_safe(result.get("expiry_suggestion")),
+                    match_status=str(match.get("status") or "no_match")[:16], match_message=match.get("message"),
+                    extracted=_json_safe(match.get("evidence")), elapsed_ms=result.get("elapsed_ms"),
+                    payload=_json_safe(result), created_at=now,
+                ))
+                s.flush()
+                for rank, cand in enumerate(candidates, start=1):
+                    med = cand.get("medicine") or {}
+                    s.add(OcrCandidateRecord(
+                        job_id=uuid.UUID(job.id), rank=rank, medicine_id=med.get("id"),
+                        medicine_name=str(med.get("ten_thuoc") or "")[:500], score=max(0.0, float(cand.get("score") or 0)),
+                        level=cand.get("level") or "low",
+                        details=_json_safe({"components": cand.get("components"), "flags": cand.get("flags")}),
+                    ))
+                if job.user_id is not None:
+                    top = (candidates[0].get("medicine") if candidates else None) or {}
+                    title = top.get("ten_thuoc") or ("Không nhận diện được thông tin thuốc" if match.get("status") != "no_catalog" else "Chưa có danh mục thuốc")
+                    names = " ".join(str((c.get("medicine") or {}).get("ten_thuoc") or "") for c in candidates)
+                    s.add(ScanHistory(
+                        user_id=job.user_id, job_id=uuid.UUID(job.id), status=str(match.get("status") or "no_match")[:16],
+                        title=str(title)[:300], subtitle=(top.get("ham_luong") or None), candidate_count=len(candidates),
+                        top_medicine_id=top.get("id"), search_text=normalize_text(names + " " + str(title))[:1000],
+                        created_at=job.created_at,
+                    ))
+        except Exception:  # noqa: BLE001 — kết quả vẫn trả về được từ bộ nhớ
+            log.exception("Không lưu được kết quả lượt quét %s", job.id)
 
     # ---- dọn dẹp ---------------------------------------------------------- #
     def _cleanup(self) -> None:
@@ -386,6 +598,25 @@ class OcrService:
                     removed += 1
                 except OSError:
                     pass
+        return removed
+
+    def cleanup_old_scans(self, retention_days: int) -> int:
+        """Xóa ảnh thu nhỏ của lượt quét quá hạn lưu giữ (kết quả văn bản vẫn giữ trong CSDL)."""
+        cutoff = clock.now() - timedelta(days=max(1, retention_days))
+        removed = 0
+        with self.db.session() as s:
+            rows = s.scalars(
+                select(OcrJobRecord).where(OcrJobRecord.created_at < cutoff, OcrJobRecord.thumb_path.is_not(None))
+            ).all()
+            for rec in rows:
+                for path in (rec.thumb_path, rec.image_path):
+                    if path:
+                        try:
+                            Path(path).unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                rec.thumb_path = None
+                removed += 1
         return removed
 
     def shutdown(self) -> None:

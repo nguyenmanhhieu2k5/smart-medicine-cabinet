@@ -11,7 +11,7 @@ from app.models import Setting
 from app.schemas.settings import AppSettings
 
 # Các khóa cho phép đặt lại về None bằng cách gửi null.
-NULLABLE_KEYS = {"camera_device_id", "esp32_token", "tts_voice", "catalog_source_path", "profile_avatar"}
+NULLABLE_KEYS = {"camera_device_id", "tts_voice", "catalog_source_path", "profile_avatar"}
 
 
 def load_settings(session: Session) -> AppSettings:

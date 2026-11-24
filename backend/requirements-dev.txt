@@ -1,7 +1,6 @@
-# Thư viện cho kiểm thử và đóng gói (không cần khi chạy ứng dụng).
+# Thư viện cho kiểm thử (không cần khi chạy máy chủ).
+# Từ 2.0 máy chủ chạy trực tiếp từ backend\.venv thành dịch vụ Windows — không còn đóng gói bằng PyInstaller.
 -r requirements.txt
 pytest==9.2.0
-pyinstaller==6.22.3
-pyinstaller-hooks-contrib>=2026.10
-# Chỉ dùng cho scripts/make_icons.py và scripts/build_ocr_models_from_rapidocr.py:
-#   pillow, playwright, rapidocr
+# Chỉ dùng cho scripts/make_icons.py, mobile/scripts/make_icons.py, mobile/visual-check/compare.py
+# và scripts/build_ocr_models_from_rapidocr.py: pillow, playwright, rapidocr

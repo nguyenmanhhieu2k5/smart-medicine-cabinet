@@ -1,14 +1,16 @@
 ﻿<#
 .SYNOPSIS
-  Tạo bản cài đặt Windows (NSIS .exe) cho "Tủ thuốc thông minh".
+  Tạo bản cài đặt ứng dụng QUẢN TRỊ cho Windows (NSIS .exe) của "Tủ thuốc thông minh".
 
 .DESCRIPTION
   1. Cài đặt môi trường (scripts\setup-windows.ps1)          — bỏ qua bằng -SkipSetup
   2. Chạy kiểm thử backend (pytest) và giao diện (vitest)     — bỏ qua bằng -SkipTests
   3. Build giao diện (Vite)  ->  frontend\dist
-  4. Đóng gói backend (PyInstaller)  ->  backend\dist\smc-backend\smc-backend.exe
-  5. Kiểm tra đủ thành phần (backend, Excel, mô hình OCR, biểu tượng)
-  6. electron-builder + NSIS  ->  release\SmartMedicineCabinet-Setup-<phiên bản>.exe
+  4. Kiểm tra thành phần (giao diện, biểu tượng; chặn đóng gói backend/CSDL/mật khẩu)
+  5. electron-builder + NSIS  ->  release\SmartMedicineCabinet-Admin-Setup-<phiên bản>.exe
+
+  Từ v2.0, ứng dụng Windows chỉ là máy QUẢN TRỊ: không kèm backend, PostgreSQL hay mô hình OCR. Máy chủ chạy trên
+  Mini PC, cài bằng deploy\postgres\setup-postgres.ps1 + deploy\windows\install-server-service.ps1.
 
   Lần đầu, electron-builder tải NSIS và công cụ chỉnh file .exe từ GitHub (cần Internet).
   Bản cài đặt không có chữ ký số nên Windows SmartScreen sẽ cảnh báo khi chạy lần đầu
@@ -54,33 +56,29 @@ function Invoke-Checked {
 }
 
 if (-not $OnWindows) {
-  Write-Host "Cảnh báo: không phải Windows. PyInstaller không biên dịch chéo nên sẽ không tạo được smc-backend.exe;" -ForegroundColor Yellow
-  Write-Host "          dùng 'npm run pack' để tạo bản chạy thử cho hệ điều hành hiện tại." -ForegroundColor Yellow
+  Write-Host "Cảnh báo: không phải Windows; dùng 'npm run pack' để tạo bản chạy thử cho hệ điều hành hiện tại." -ForegroundColor Yellow
 }
 
 if (-not $SkipSetup) {
-  Write-Step "1/6 Cài đặt môi trường"
+  Write-Step "1/5 Cài đặt môi trường"
   $setupArguments = @{}
   if ($Python) { $setupArguments["Python"] = $Python }
   & (Join-Path $PSScriptRoot "setup-windows.ps1") @setupArguments
 }
 
 if (-not $SkipTests) {
-  Write-Step "2/6 Kiểm thử"
+  Write-Step "2/5 Kiểm thử"
   Invoke-Checked -File "npm" -Arguments @("run", "test:backend")
   Invoke-Checked -File "npm" -Arguments @("run", "test:frontend")
 }
 
-Write-Step "3/6 Build giao diện"
+Write-Step "3/5 Build giao diện"
 Invoke-Checked -File "npm" -Arguments @("run", "build:frontend")
 
-Write-Step "4/6 Đóng gói backend (PyInstaller)"
-Invoke-Checked -File "npm" -Arguments @("run", "build:backend")
-
-Write-Step "5/6 Kiểm tra thành phần"
+Write-Step "4/5 Kiểm tra thành phần"
 Invoke-Checked -File "npm" -Arguments @("run", "check:resources")
 
-Write-Step "6/6 Tạo bản cài đặt (electron-builder)"
+Write-Step "5/5 Tạo bản cài đặt (electron-builder)"
 if ($DirOnly) { Invoke-Checked -File "npx" -Arguments @("electron-builder", "--win", "--x64", "--dir") }
 else { Invoke-Checked -File "npx" -Arguments @("electron-builder", "--win", "nsis", "--x64") }
 
@@ -94,4 +92,4 @@ if (Test-Path $release) {
   $unpacked = Join-Path $release "win-unpacked"
   if (Test-Path $unpacked) { Write-Host "  Bản chạy thử không cần cài: $unpacked\SmartMedicineCabinet.exe" }
 }
-Write-Host "Kiểm tra bản đóng gói:  npm run test:desktop:packed"
+Write-Host "Kiểm tra bản đóng gói (cần máy chủ đang chạy):  npm run test:desktop:packed"

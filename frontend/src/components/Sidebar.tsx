@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import {
-  Activity, Bell, CalendarDays, CircleAlert, CircleCheck, Clock, House, LoaderCircle, Package, Pill, ScanLine, Settings, User,
+  Activity, Bell, CalendarDays, CircleAlert, CircleCheck, Clock, House, LoaderCircle, Package, Pill, ScanLine, Settings, ShieldCheck, User,
   type LucideIcon,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
@@ -25,6 +25,7 @@ export const MAIN_NAV: NavItem[] = [
   { to: "/history", label: "Lịch sử", icon: Activity },
 ];
 export const FOOTER_NAV: NavItem[] = [
+  { to: "/admin", label: "Quản trị", icon: ShieldCheck },
   { to: "/profile", label: "Hồ sơ", icon: User },
   { to: "/settings", label: "Cài đặt", icon: Settings },
 ];
@@ -37,13 +38,13 @@ function NavRow({ item, badge }: { item: NavItem; badge?: number }) {
       className={({ isActive }) =>
         clsx(
           "group relative flex h-[55px] items-center gap-3.5 rounded-2xl pl-5 pr-4 text-[16px] transition-colors duration-150 short:h-11 short:text-[15px]",
-          isActive ? "bg-primary-soft font-semibold text-primary" : "font-medium text-muted hover:bg-tile hover:text-navy",
+          // (3) Mục đang chọn: nền #0066FF, chữ trắng.
+          isActive ? "bg-primary font-semibold text-white shadow-button" : "font-medium text-muted hover:bg-tile hover:text-navy",
         )
       }
     >
-      {({ isActive }) => (
+      {() => (
         <>
-          {isActive && <span className="absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" aria-hidden />}
           <item.icon size={22} strokeWidth={1.7} className="shrink-0" />
           <span className="truncate">{t(item.label)}</span>
           {badge !== undefined && (
@@ -69,10 +70,10 @@ export function Sidebar() {
   const language = useLanguageStore((state) => state.language);
   const alerts = useAlertCount();
   const health = useHealth();
-  const version = window.smc?.appVersion ?? health.data?.version ?? "1.0.0";
+  const version = window.smc?.appVersion ?? health.data?.version ?? "2.0.0";
 
   let StatusIcon: LucideIcon = LoaderCircle;
-  let statusText = t("Đang khởi động dịch vụ…");
+  let statusText = t("Đang kết nối máy chủ…");
   let statusClass = "text-muted";
   let spin = true;
   if (health.data?.status === "ok") {
@@ -82,13 +83,13 @@ export function Sidebar() {
     spin = false;
   } else if (health.isError && health.failureCount > 8) {
     StatusIcon = CircleAlert;
-    statusText = t("Mất kết nối dịch vụ nền");
+    statusText = t("Mất kết nối máy chủ");
     statusClass = "text-danger";
     spin = false;
   }
 
   return (
-    <aside data-testid="sidebar" className="flex h-full w-[256px] shrink-0 flex-col border-r border-line bg-surface/70 px-[18px] pb-6 pt-[43px] short:pt-6 max-xl:w-[228px]">
+    <aside data-testid="sidebar" className="flex h-full w-[256px] shrink-0 flex-col border-r border-line bg-surface px-[18px] pb-6 pt-[43px] short:pt-6 max-xl:w-[228px]">
       <div className="mb-[58px] flex items-center gap-3 px-3.5 short:mb-6">
         <span className="btn-gradient inline-flex size-[50px] shrink-0 items-center justify-center rounded-2xl text-white shadow-button">
           <Pill size={26} strokeWidth={1.9} />
@@ -122,7 +123,7 @@ export function Sidebar() {
               : t("Chưa có danh mục thuốc")
             : t("Đang kiểm tra dữ liệu")}
           <br />
-          PC Edition • v{version}
+          Admin • v{version}
         </p>
       </div>
     </aside>

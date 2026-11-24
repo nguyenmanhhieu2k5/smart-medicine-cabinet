@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { AiLookupPanel } from "@/components/AiLookupPanel";
 import { PrimaryButton } from "@/components/Button";
 import { CabinetItemModal, type CabinetModalRequest } from "@/components/CabinetItemModal";
 import { Card } from "@/components/Card";
@@ -41,7 +42,7 @@ function ScannedImage({ job, processing }: { job: OcrJob | undefined; processing
         {processing && (
           <>
             <div className="absolute inset-0 bg-[#111b39]/20" />
-            <span aria-hidden className="scanline absolute inset-x-6 top-4 h-0.5 rounded-full bg-primary shadow-[0_0_18px_3px_rgba(8,120,249,0.7)]" style={{ ["--scan-distance" as string]: "300px" }} />
+            <span aria-hidden className="scanline absolute inset-x-6 top-4 h-0.5 rounded-full bg-primary shadow-[0_0_18px_3px_rgba(0,102,255,0.7)]" style={{ ["--scan-distance" as string]: "300px" }} />
           </>
         )}
       </div>
@@ -315,6 +316,9 @@ export function ScanResultPage() {
           {match?.status === "confident" && <div className="mt-4"><Note>{match.message}</Note></div>}
         </Card>
       )}
+
+      {/* Người dùng xác nhận không có kết quả đúng (hoặc không nhận diện được) → tìm trên mạng bằng AI */}
+      {!processing && job.status === "done" && match?.status !== "no_catalog" && <AiLookupPanel jobId={jobId} />}
 
       <CabinetItemModal request={saving} onClose={() => setSaving(null)} onSaved={(item) => navigate(`/cabinet/${item.id}`)} />
     </div>

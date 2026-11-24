@@ -1,25 +1,29 @@
 import { useQueryClient } from "@tanstack/react-query";
+import clsx from "clsx";
 import {
-  BellRing, Camera, Check, CircleCheck, Cpu, Database, Download, Droplet, FileSpreadsheet, FolderOpen, HardDrive, Languages, LoaderCircle,
-  MonitorCog, Palette, PlugZap, RefreshCw, RotateCcw, ShieldCheck, Thermometer, Trash2, TriangleAlert, Upload, Volume2, Wifi, Zap, type LucideIcon,
+  Barcode, BellRing, Camera, Check, ChevronRight, CircleCheck, Cpu, Database, Download, Droplet, FileSpreadsheet, HardDrive, Languages,
+  LoaderCircle, MonitorCog, Palette, RefreshCw, ScanBarcode, Search, Server, ShieldCheck, Sparkles, Thermometer, Trash2, TriangleAlert, Unlink, Upload,
+  Volume2, Wifi, Zap, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { IconButton, PrimaryButton } from "@/components/Button";
 import { Card } from "@/components/Card";
-import { Field, Segmented, Select, TextInput, Toggle } from "@/components/Form";
+import { Segmented, Select, TextInput, Toggle } from "@/components/Form";
 import { Note } from "@/components/MedicineBits";
 import { ConfirmDialog } from "@/components/Modal";
 import { LoadingState } from "@/components/States";
 import { IconTile, StatusIndicator } from "@/components/StatusIndicator";
 import { useLanguageStore, useT } from "@/i18n";
-import { api, saveBlob } from "@/services/api";
+import { api, connectionInfo, saveBlob } from "@/services/api";
 import { formatBytes, formatDateTime, formatNumber } from "@/services/format";
-import { errorMessage, keys, useBackups, useCatalogStatus, useDevice, useOcrStatus, useSettings, useUpdateSettings } from "@/services/queries";
+import {
+  errorMessage, keys, useAiStatus, useBackups, useBarcodeStatus, useCatalogStatus, useDevice, useHealth, useOcrStatus, useSettings, useUpdateSettings,
+} from "@/services/queries";
 import { isVietnamese, speak, stopSpeaking, ttsSupported, useVoices } from "@/services/tts";
 import { usePageHeader } from "@/stores/page";
 import { toast } from "@/stores/toast";
-import type { AppSettings, SettingsPatch } from "@/types/api";
+import type { AppSettings, BarcodeImportReport, BarcodeLookup, SettingsPatch } from "@/types/api";
 
 type Draft = SettingsPatch;
 
@@ -100,24 +104,20 @@ function CatalogSection() {
       setBusy(false);
     }
   };
-  const choose = async () => {
-    if (window.smc) {
-      const path = await window.smc.pickExcelFile();
-      if (path) await start(() => api.catalogImport(path, false));
-    } else fileRef.current?.click();
-  };
+  // Máy Windows chỉ là máy quản trị: file Excel được TẢI LÊN máy chủ rồi nhập vào PostgreSQL trên Mini PC.
+  const choose = () => fileRef.current?.click();
   const last = data?.last_import;
   const source = data?.source_path ?? data?.default_source;
 
   return (
-    <Section title={t("Dữ liệu thuốc")} hint={t("Danh mục tra cứu nhập từ file Excel (DAV_unique.xlsx). Tách biệt với thuốc trong tủ.")}
+    <Section title={t("Dữ liệu thuốc")} hint={t("Danh mục tra cứu nhập từ file Excel (DAV_unique.xlsx) vào PostgreSQL trên Mini PC. Tách biệt với thuốc trong tủ.")}
       action={data && (data.count > 0
         ? <StatusIndicator tone="success" icon={CircleCheck} size="sm">{t("{count} thuốc", { count: formatNumber(data.count, language) })}</StatusIndicator>
         : <StatusIndicator tone="warning" icon={TriangleAlert} size="sm">{t("Chưa có dữ liệu")}</StatusIndicator>)}>
       {!data ? <LoadingState rows={2} /> : (
         <>
-          <Row icon={FileSpreadsheet} label={t("Nguồn dữ liệu Excel")} hint={source ?? t("Chưa chọn file")}>
-            <PrimaryButton variant="secondary" size="sm" icon={Upload} loading={busy} disabled={progress?.running} onClick={() => void choose()}>{t("Chọn file Excel…")}</PrimaryButton>
+          <Row icon={FileSpreadsheet} label={t("Nguồn dữ liệu Excel")} hint={source ? `${t("Trên máy chủ")}: ${source}` : t("Chưa chọn file")}>
+            <PrimaryButton variant="secondary" size="sm" icon={Upload} loading={busy} disabled={progress?.running} onClick={choose}>{t("Tải file Excel lên…")}</PrimaryButton>
           </Row>
           <Row icon={Database} label={t("Lần nhập gần nhất")}
             hint={last ? `${formatDateTime(last.finished_at ?? last.started_at)} · ${last.file_name}` : t("Chưa nhập lần nào")}>
@@ -154,65 +154,286 @@ function CatalogSection() {
   );
 }
 
+// ---- Mã vạch ------------------------------------------------------------------------ //
+const ISSUE_LABEL: Record<BarcodeImportReport["issues"][number]["reason"], string> = {
+  ambiguous: "Nhiều thuốc khớp", unmatched: "Không có trong danh mục", invalid: "Mã không hợp lệ", internal: "Mã nội bộ", conflict: "Xung đột",
+};
+const COLUMN_LABEL: Record<string, string> = {
+  barcode: "Mã vạch", registration: "Số đăng ký", name: "Tên thuốc", strength: "Hàm lượng", unit: "Đơn vị", manufacturer: "Hãng sản xuất",
+};
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "success" | "warning" | "danger" }) {
+  return (
+    <div className="rounded-2xl bg-tile px-4 py-3">
+      <p className="text-[12px] text-muted">{label}</p>
+      <p className={clsx("font-display text-[20px] font-bold tabular-nums", tone === "success" ? "text-success" : tone === "warning" ? "text-warning-ink" : tone === "danger" ? "text-danger" : "text-navy")}>{value}</p>
+    </div>
+  );
+}
+
+function BarcodeSection() {
+  const t = useT();
+  const client = useQueryClient();
+  const language = useLanguageStore((state) => state.language);
+  const status = useBarcodeStatus();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [report, setReport] = useState<BarcodeImportReport | null>(null);
+  const [busy, setBusy] = useState<"check" | "import" | null>(null);
+  const [code, setCode] = useState("");
+  const [lookup, setLookup] = useState<BarcodeLookup | null>(null);
+  const [looking, setLooking] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const n = (value: number) => formatNumber(value, language);
+  const data = status.data;
+
+  // Bước 1: máy chủ CHỈ KIỂM TRA file (không ghi gì) và trả báo cáo khớp với danh mục.
+  const check = async (picked: File) => {
+    setFile(picked);
+    setReport(null);
+    setBusy("check");
+    try {
+      setReport(await api.barcodeImport(picked, true));
+    } catch (error) {
+      toast.error(t("Không đọc được file mã vạch"), errorMessage(error));
+      setFile(null);
+    } finally {
+      setBusy(null);
+    }
+  };
+  // Bước 2: quản trị viên xem báo cáo rồi mới nhập thật.
+  const commit = async () => {
+    if (!file) return;
+    setBusy("import");
+    try {
+      const done = await api.barcodeImport(file, false);
+      toast.success(t("Đã gắn mã vạch"), t("{linked} mã mới, {unchanged} mã đã có.", { linked: n(done.linked), unchanged: n(done.unchanged) }));
+      setReport(null);
+      setFile(null);
+      await client.invalidateQueries({ queryKey: keys.barcodes });
+    } catch (error) {
+      toast.error(t("Nhập mã vạch thất bại"), errorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const find = async () => {
+    if (!code.trim()) return;
+    setLooking(true);
+    try {
+      setLookup(await api.barcodeLookup(code.trim()));
+    } catch (error) {
+      toast.error(t("Không tra được mã vạch"), errorMessage(error));
+    } finally {
+      setLooking(false);
+    }
+  };
+  const unlink = async () => {
+    if (!lookup?.gtin) return;
+    setUnlinking(true);
+    try {
+      await api.barcodeDelete(lookup.gtin);
+      toast.success(t("Đã gỡ liên kết mã vạch"), lookup.code);
+      setLookup(null);
+      setConfirmUnlink(false);
+      await client.invalidateQueries({ queryKey: keys.barcodes });
+    } catch (error) {
+      toast.error(t("Không gỡ được liên kết"), errorMessage(error));
+    } finally {
+      setUnlinking(false);
+    }
+  };
+
+  const last = data?.last_import;
+  const review = report ? report.ambiguous + report.unmatched : 0;
+  return (
+    <Section title={t("Mã vạch thuốc")}
+      hint={t("Gắn mã vạch (EAN/GTIN) vào thuốc CÓ SẴN trong danh mục từ file Excel/CSV của nhà thuốc: cột Mã vạch + Số đăng ký (hoặc Tên thuốc). Không tạo thuốc mới; dòng nào không chắc chắn sẽ được liệt kê để xem lại.")}
+      action={data && (data.barcodes > 0
+        ? <StatusIndicator tone="success" icon={CircleCheck} size="sm">{t("{count} mã · {medicines} thuốc", { count: n(data.barcodes), medicines: n(data.medicines_with_barcode) })}</StatusIndicator>
+        : <StatusIndicator tone="neutral" icon={Barcode} size="sm">{t("Chưa có mã vạch")}</StatusIndicator>)}>
+      {!data ? <LoadingState rows={2} /> : (
+        <>
+          <Row icon={FileSpreadsheet} label={t("Nhập file mã vạch")} hint={t("Excel .xlsx hoặc .csv — kiểm tra trước, chưa ghi gì cho tới khi bấm Nhập")}>
+            <PrimaryButton variant="secondary" size="sm" icon={Upload} loading={busy === "check"} disabled={busy !== null} onClick={() => fileRef.current?.click()}>
+              {t("Chọn file…")}
+            </PrimaryButton>
+          </Row>
+          {report && (
+            <div className="mt-3 rounded-2xl border border-line p-4" data-testid="barcode-report">
+              <p className="text-[14px] font-semibold text-navy">{report.file_name}{report.sheet ? ` · ${report.sheet}` : ""}</p>
+              <p className="mt-0.5 text-[12.5px] text-muted">
+                {t("Cột đã nhận")}: {Object.entries(report.columns).map(([role, name]) => `${t(COLUMN_LABEL[role] ?? role)} = “${name}”`).join(" · ")}
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                <Stat label={t("Dòng khớp danh mục")} value={`${n(report.matched_rows)} / ${n(report.rows_with_barcode)}`} tone="success" />
+                <Stat label={t("Theo số đăng ký / theo tên")} value={`${n(report.by_registration)} / ${n(report.by_name)}`} />
+                <Stat label={t("Mã sẽ gắn mới")} value={n(report.linked)} tone="success" />
+                <Stat label={t("Mã đã có sẵn")} value={n(report.unchanged)} />
+                <Stat label={t("Cần xem lại")} value={n(review)} tone={review ? "warning" : undefined} />
+                <Stat label={t("Mã lỗi / nội bộ")} value={`${n(report.invalid)} / ${n(report.internal)}`} tone={report.invalid ? "warning" : undefined} />
+                <Stat label={t("Xung đột")} value={n(report.conflicts)} tone={report.conflicts ? "danger" : undefined} />
+                <Stat label={t("Thuốc trong danh mục")} value={n(report.catalog_total)} />
+              </div>
+              {report.issues.length > 0 && (
+                <div className="mt-3 max-h-64 overflow-auto rounded-xl ring-1 ring-line">
+                  <table className="w-full text-left text-[12.5px]">
+                    <thead className="sticky top-0 bg-tile text-muted">
+                      <tr><th className="px-3 py-2">{t("Dòng")}</th><th className="px-3 py-2">{t("Mã vạch")}</th><th className="px-3 py-2">{t("Thuốc trong file")}</th><th className="px-3 py-2">{t("Vấn đề")}</th></tr>
+                    </thead>
+                    <tbody>
+                      {report.issues.slice(0, 100).map((issue, i) => (
+                        <tr key={`${issue.row}-${i}`} className="border-t border-line align-top">
+                          <td className="px-3 py-2 tabular-nums text-muted">{issue.row}</td>
+                          <td className="px-3 py-2 font-mono">{issue.barcode}</td>
+                          <td className="px-3 py-2 text-navy">{issue.name ?? "—"}{issue.registration ? <span className="text-muted"> · {issue.registration}</span> : null}</td>
+                          <td className="px-3 py-2"><span className="font-semibold text-navy">{t(ISSUE_LABEL[issue.reason])}</span> — <span className="text-muted">{issue.message}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {report.issues.length > 100 && <p className="mt-1 text-[12px] text-muted">{t("Hiển thị 100 vấn đề đầu tiên.")}</p>}
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <PrimaryButton variant="ghost" size="sm" disabled={busy !== null} onClick={() => { setReport(null); setFile(null); }}>{t("Hủy")}</PrimaryButton>
+                <PrimaryButton variant="soft" size="sm" icon={Barcode} loading={busy === "import"} disabled={busy !== null || report.linked === 0} onClick={() => void commit()}>
+                  {t("Nhập {count} mã vạch", { count: n(report.linked) })}
+                </PrimaryButton>
+              </div>
+            </div>
+          )}
+          <Row icon={ScanBarcode} label={t("Tra một mã vạch")} hint={t("Gõ hoặc quét bằng đầu đọc mã vạch USB")}>
+            <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); void find(); }}>
+              <TextInput aria-label={t("Mã vạch cần tra")} value={code} onChange={(event) => setCode(event.target.value)} placeholder="893…" className="!h-10 !w-[190px] font-mono" />
+              <PrimaryButton type="submit" variant="secondary" size="sm" loading={looking} disabled={!code.trim()}>{t("Tra")}</PrimaryButton>
+            </form>
+          </Row>
+          {lookup && (
+            <div className="mt-2" data-testid="barcode-lookup">
+              {lookup.medicine ? (
+                <div className="flex items-start justify-between gap-3 rounded-2xl bg-tile px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-[14px] font-semibold text-navy">{lookup.medicine.ten_thuoc}</p>
+                    <p className="text-[12.5px] text-muted">
+                      {lookup.code} · {t("SĐK")} {lookup.medicine.so_dang_ky ?? "—"} · {lookup.link?.match_method === "name" ? t("ghép theo tên + hàm lượng") : t("ghép theo số đăng ký")}
+                    </p>
+                  </div>
+                  <PrimaryButton variant="danger" size="sm" icon={Unlink} onClick={() => setConfirmUnlink(true)}>{t("Gỡ liên kết")}</PrimaryButton>
+                </div>
+              ) : <Note tone={lookup.status === "not_found" ? "info" : "warning"}>{lookup.message}</Note>}
+            </div>
+          )}
+          <Row icon={Database} label={t("Lần nhập gần nhất")}
+            hint={last ? `${formatDateTime(last.created_at)} · ${last.file_name} · ${t("{linked} mã mới, {conflicts} xung đột, {unmatched} cần xem lại", { linked: n(last.linked), conflicts: n(last.conflicts), unmatched: n(last.unmatched) })}` : t("Chưa nhập lần nào")}>
+            <span />
+          </Row>
+          <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.csv" className="hidden" data-testid="barcode-file"
+            onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; if (picked) void check(picked); }} />
+          <ConfirmDialog
+            open={confirmUnlink} danger title={t("Gỡ liên kết mã vạch?")} confirmLabel={t("Gỡ liên kết")} loading={unlinking}
+            description={t("Mã {code} sẽ không còn trỏ tới “{name}”. Thuốc trong danh mục giữ nguyên.", { code: lookup?.code ?? "", name: lookup?.medicine?.ten_thuoc ?? "" })}
+            onClose={() => setConfirmUnlink(false)} onConfirm={() => void unlink()}
+          />
+        </>
+      )}
+    </Section>
+  );
+}
+
+// ---- AI tra cứu ------------------------------------------------------------------------ //
+function AiSection() {
+  const t = useT();
+  const status = useAiStatus();
+  const data = status.data;
+  return (
+    <Section title={t("AI tra cứu thuốc (Gemini)")}
+      hint={t("Khi mã vạch/QR chưa có trong dữ liệu hoặc người dùng xác nhận không có thuốc đúng, máy chủ hỏi Google Gemini (có Google Search). Khóa API chỉ nằm trong server.env trên Mini PC (SMC_GEMINI_API_KEY), không lưu trong ứng dụng.")}
+      action={data && (data.configured
+        ? <StatusIndicator tone="success" icon={CircleCheck} size="sm">{t("Đã cấu hình")}</StatusIndicator>
+        : <StatusIndicator tone="warning" icon={TriangleAlert} size="sm">{t("Chưa cấu hình")}</StatusIndicator>)}>
+      {!data ? <LoadingState rows={2} /> : (
+        <>
+          <Row icon={Sparkles} label={t("Tìm kiếm trên mạng (Google Search)")}
+            hint={data.search_available ? t("Sẵn sàng") : t("Chưa khả dụng: khóa API hết hạn mức tìm kiếm — bật thanh toán cho khóa trong Google AI Studio. Trong lúc đó AI vẫn đọc được ảnh quét và mã QR.")}>
+            <StatusIndicator tone={data.search_available ? "success" : "warning"} size="sm">{data.search_available ? t("Sẵn sàng") : t("Chưa khả dụng")}</StatusIndicator>
+          </Row>
+          <Row icon={Search} label={t("Tra mã vạch trên mạng không dùng AI (Tavily)")}
+            hint={data.web_search?.configured ? (data.web_search.last_error ?? t("Dùng khi AI không tra được mạng: tìm trang có đúng mã vạch rồi đối chiếu số đăng ký với danh mục")) : t("Chưa cấu hình: thêm SMC_TAVILY_API_KEY vào server.env (đăng ký miễn phí 1.000 lượt/tháng tại tavily.com)")}>
+            <StatusIndicator tone={data.web_search?.configured ? "success" : "neutral"} size="sm">{data.web_search?.configured ? t("Sẵn sàng") : t("Chưa cấu hình")}</StatusIndicator>
+          </Row>
+          <Row icon={Cpu} label={t("Mô hình (theo thứ tự ưu tiên)")} hint={t("Mô hình đầu quá tải thì tự chuyển sang mô hình sau")}>
+            <span className="max-w-[340px] truncate text-[13px] font-semibold text-navy">{data.models.join(" → ")}</span>
+          </Row>
+          {data.last_error && <p className="pt-2 text-[12.5px] text-warning-ink">{data.last_error}</p>}
+        </>
+      )}
+    </Section>
+  );
+}
+
 // ---- Sao lưu ------------------------------------------------------------------------ //
 function BackupSection() {
   const t = useT();
   const client = useQueryClient();
   const backups = useBackups();
-  const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [restoring, setRestoring] = useState<{ name?: string; file?: File } | null>(null);
 
   const run = async (label: string, action: () => Promise<unknown>, success: string) => {
     setBusy(label);
     try {
       await action();
       toast.success(success);
-      await client.invalidateQueries();
+      await client.invalidateQueries({ queryKey: keys.backups });
     } catch (error) {
       toast.error(t("Không thực hiện được"), errorMessage(error));
     } finally {
       setBusy(null);
     }
   };
-  const items = backups.data?.items ?? [];
+  const data = backups.data;
+  const items = data?.items ?? [];
+  const last = data?.last_automatic;
 
   return (
-    <Section title={t("Sao lưu và khôi phục")} hint={t("Gồm thuốc trong tủ, lời nhắc, lịch sử, cảnh báo và cài đặt. Danh mục thuốc được nhập lại từ Excel nên không nằm trong bản sao lưu.")}>
+    <Section title={t("Sao lưu cơ sở dữ liệu")}
+      hint={t("Sao lưu toàn bộ PostgreSQL trên Mini PC bằng pg_dump: danh mục, tủ thuốc, tài khoản, lịch sử quét, thiết bị. Máy chủ tự sao lưu mỗi ngày lúc 02:00.")}
+      action={last && (last.ok === false
+        ? <StatusIndicator tone="danger" icon={TriangleAlert} size="sm">{t("Lần tự động gần nhất lỗi")}</StatusIndicator>
+        : <StatusIndicator tone="success" icon={CircleCheck} size="sm">{t("Tự động: OK")}</StatusIndicator>)}>
       <div className="flex flex-wrap items-center gap-2.5">
-        <PrimaryButton icon={HardDrive} loading={busy === "create"} onClick={() => void run("create", () => api.backupCreate(), t("Đã tạo bản sao lưu"))}>{t("Tạo bản sao lưu")}</PrimaryButton>
-        <PrimaryButton variant="secondary" icon={Upload} onClick={() => fileRef.current?.click()}>{t("Khôi phục từ file…")}</PrimaryButton>
-        {window.smc && <PrimaryButton variant="ghost" icon={FolderOpen} onClick={() => void window.smc?.openDataFolder()}>{t("Mở thư mục dữ liệu")}</PrimaryButton>}
-        <input ref={fileRef} type="file" accept=".smcbak" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) setRestoring({ file }); }} />
+        <PrimaryButton icon={HardDrive} loading={busy === "create"} onClick={() => void run("create", () => api.backupCreate(), t("Đã tạo bản sao lưu"))}>{t("Sao lưu ngay")}</PrimaryButton>
       </div>
+      {last?.ok === false && last.error && <p className="pt-3 text-[12.5px] text-danger">{last.error}</p>}
       {backups.isLoading ? <div className="pt-4"><LoadingState rows={2} /></div> : items.length === 0 ? (
         <p className="pt-4 text-[13px] text-muted">{t("Chưa có bản sao lưu nào.")}</p>
       ) : (
         <ul className="mt-3 divide-y divide-line">
-          {items.slice(0, 6).map((item) => (
+          {items.slice(0, 8).map((item) => (
             <li key={item.name} className="flex items-center gap-3 py-2.5">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] font-semibold text-navy">{item.name}</p>
-                <p className="text-[12px] text-muted">{formatDateTime(item.created_at)} · {formatBytes(item.size)}</p>
+                <p className="text-[12px] text-muted">{formatDateTime(item.created_at)} · {formatBytes(item.size)} · {item.automatic ? t("Tự động") : t("Thủ công")}</p>
               </div>
               <IconButton icon={Download} label={t("Tải về")} size="sm" variant="ghost" onClick={() => void api.backupDownload(item.name).then((f) => saveBlob(f.blob, item.name)).catch((e) => toast.error(t("Không tải được file"), errorMessage(e)))} />
-              <IconButton icon={RotateCcw} label={t("Khôi phục")} size="sm" variant="ghost" onClick={() => setRestoring({ name: item.name })} />
               <IconButton icon={Trash2} label={t("Xóa")} size="sm" variant="danger" disabled={busy !== null} onClick={() => void run("delete", () => api.backupDelete(item.name), t("Đã xóa bản sao lưu"))} />
             </li>
           ))}
         </ul>
       )}
-      {backups.data && <p className="mt-3 break-all text-[12px] text-muted">{t("Thư mục sao lưu")}: {backups.data.directory}</p>}
-      <ConfirmDialog
-        open={restoring !== null} danger title={t("Khôi phục dữ liệu?")} confirmLabel={t("Khôi phục")} loading={busy === "restore"}
-        description={t("Thuốc trong tủ, lời nhắc, lịch sử và cài đặt hiện tại sẽ được thay bằng nội dung bản sao lưu “{name}”. Ứng dụng tự tạo một bản sao lưu an toàn trước khi khôi phục.", { name: restoring?.name ?? restoring?.file?.name ?? "" })}
-        onClose={() => setRestoring(null)}
-        onConfirm={() => {
-          const target = restoring;
-          if (!target) return;
-          void run("restore", () => (target.file ? api.backupRestoreUpload(target.file) : api.backupRestore(target.name as string)), t("Đã khôi phục dữ liệu")).then(() => setRestoring(null));
-        }}
-      />
+      {data && (
+        <div className="mt-3 space-y-1 break-all text-[12px] text-muted">
+          <p>{t("Thư mục sao lưu trên Mini PC")}: {data.directory}{data.copy_directory ? ` · ${t("bản sao thứ hai")}: ${data.copy_directory}` : ""}</p>
+          <p>{t("Giữ {count} bản tự động gần nhất.", { count: data.keep_automatic })}</p>
+        </div>
+      )}
+      <div className="mt-4">
+        <Note tone="warning">
+          {t("Khôi phục ghi đè toàn bộ dữ liệu nên chỉ thực hiện trực tiếp trên Mini PC (không làm từ xa):")}{" "}
+          <span className="break-all font-mono text-[12px]">{data?.restore_hint ?? "python -m app.cli backup restore <file>.dump"}</span>
+        </Note>
+      </div>
     </Section>
   );
 }
@@ -221,16 +442,15 @@ function BackupSection() {
 export function SettingsPage() {
   const t = useT();
   const location = useLocation();
+  const navigate = useNavigate();
   usePageHeader(t("Cài đặt"), t("Tùy chỉnh thiết bị và ứng dụng"), `${t("Tủ thuốc thông minh")} / ${t("Cài đặt")}`);
   const query = useSettings();
   const save = useUpdateSettings();
   const device = useDevice().data;
+  const health = useHealth().data;
   const ocr = useOcrStatus();
   const voices = useVoices();
   const [draft, setDraft] = useState<Draft>({});
-  const [token, setToken] = useState("");
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [speaking, setSpeaking] = useState(false);
   const stored = query.data?.settings;
@@ -255,9 +475,9 @@ export function SettingsPage() {
       if ((stored as unknown as Record<string, unknown>)[key as string] === next) delete (copy as Record<string, unknown>)[key as string];
       return copy;
     });
-  const dirtyKeys = Object.keys(draft).length + (token ? 1 : 0);
+  const dirtyKeys = Object.keys(draft).length;
 
-  const numbersValid = (["temp_min", "temp_max", "humidity_min", "humidity_max", "expiry_warning_days", "low_stock_threshold", "esp32_port", "esp32_poll_seconds", "esp32_timeout_seconds", "ocr_det_limit_side_len", "ocr_cpu_threads"] as const)
+  const numbersValid = (["temp_min", "temp_max", "humidity_min", "humidity_max", "expiry_warning_days", "low_stock_threshold", "ocr_det_limit_side_len", "ocr_cpu_threads"] as const)
     .every((key) => Number.isFinite(value(key)));
   const rangeError = value("temp_min") >= value("temp_max") ? t("Nhiệt độ tối thiểu phải nhỏ hơn tối đa.")
     : value("humidity_min") >= value("humidity_max") ? t("Độ ẩm tối thiểu phải nhỏ hơn tối đa.") : null;
@@ -265,27 +485,7 @@ export function SettingsPage() {
   const submit = () => {
     if (!numbersValid) return toast.error(t("Có ô số đang để trống"), t("Hãy nhập đủ giá trị trước khi lưu."));
     if (rangeError) return toast.error(t("Ngưỡng không hợp lệ"), rangeError);
-    const body: Draft = { ...draft };
-    if (token) body.esp32_token = token;
-    save.mutate(body, { onSuccess: () => { setDraft({}); setToken(""); } });
-  };
-
-  const testDevice = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const result = await api.deviceTest({
-        mode: value("esp32_mode"), host: value("esp32_host"), port: value("esp32_port"), path: value("esp32_path"),
-        timeout: value("esp32_timeout_seconds"), token: token || null,
-      });
-      setTestResult(result.ok
-        ? { ok: true, text: `${t("Kết nối được")}: ${result.temperature ?? "—"}°C · ${result.humidity ?? "—"}%${result.simulated ? ` (${t("Mô phỏng")})` : ""}` }
-        : { ok: false, text: result.error ?? t("Không kết nối được") });
-    } catch (error) {
-      setTestResult({ ok: false, text: errorMessage(error) });
-    } finally {
-      setTesting(false);
-    }
+    save.mutate({ ...draft }, { onSuccess: () => setDraft({}) });
   };
 
   const viVoices = voices.filter(isVietnamese);
@@ -295,7 +495,8 @@ export function SettingsPage() {
   const esp32Chip = device?.state === "connected" ? <StatusIndicator tone="success" size="sm">{t("Đã kết nối")}</StatusIndicator>
     : device?.state === "connecting" ? <StatusIndicator tone="info" size="sm">{t("Đang kết nối")}</StatusIndicator>
     : device?.enabled ? <StatusIndicator tone="warning" size="sm">{t(device.environment.label)}</StatusIndicator>
-    : <StatusIndicator tone="neutral" size="sm">{t("Chưa kết nối")}</StatusIndicator>;
+    : <StatusIndicator tone="neutral" size="sm">{t("Chưa có thiết bị")}</StatusIndicator>;
+  const primaryName = typeof device?.device?.name === "string" ? device.device.name : null;
 
   return (
     <div className="pb-20">
@@ -336,37 +537,16 @@ export function SettingsPage() {
           </Row>
         </Section>
 
-        <Section id="esp32" title={t("Kết nối thiết bị")} hint={t("ESP32 gửi nhiệt độ, độ ẩm qua mạng nội bộ. Giao thức: docs/ESP32_PROTOCOL.md.")} action={esp32Chip}>
-          <Row icon={Wifi} label={t("Kết nối ESP32")} hint={device?.enabled && device.last_error ? device.last_error : device?.address ?? undefined}>
-            <Toggle checked={value("esp32_enabled")} onChange={(v) => set("esp32_enabled", v)} label={t("Bật kết nối ESP32")} />
+        <Section id="esp32" title={t("Kết nối thiết bị")} hint={t("ESP32 tự kết nối ra Internet tới máy chủ (WSS qua Tailscale Funnel hoặc Cloudflare Tunnel) — không cần chung Wi-Fi với máy này. Giao thức: docs/ESP32_PROTOCOL.md.")} action={esp32Chip}>
+          <Row icon={Wifi} label={primaryName ?? t("Tủ chính")} hint={device?.last_error ?? (device?.last_update ? `${t("Số đo gần nhất")}: ${formatDateTime(device.last_update)}` : undefined)}>
+            <PrimaryButton variant="secondary" size="sm" iconRight={ChevronRight} onClick={() => navigate("/admin/devices")}>{t("Quản lý thiết bị")}</PrimaryButton>
           </Row>
-          <div className="grid grid-cols-[1fr_110px] gap-3 pt-4">
-            <Field label={t("Địa chỉ thiết bị (IP hoặc tên máy)")}><TextInput value={value("esp32_host")} placeholder="192.168.1.50" maxLength={255} onChange={(event) => set("esp32_host", event.target.value)} /></Field>
-            <Field label={t("Cổng")}><TextInput type="number" min={1} max={65535} value={Number.isFinite(value("esp32_port")) ? value("esp32_port") : ""} onChange={(event) => set("esp32_port", event.target.value === "" ? Number.NaN : Number(event.target.value))} /></Field>
-          </div>
-          <div className="grid grid-cols-3 gap-3 pt-3">
-            <Field label={t("Giao thức")}>
-              <Select value={value("esp32_mode")} onChange={(event) => set("esp32_mode", event.target.value as AppSettings["esp32_mode"])}>
-                <option value="http">HTTP (polling)</option>
-                <option value="websocket">WebSocket</option>
-              </Select>
-            </Field>
-            <Field label={t("Đường dẫn")}><TextInput value={value("esp32_path")} maxLength={200} onChange={(event) => set("esp32_path", event.target.value)} /></Field>
-            <Field label={t("Chu kỳ đọc (giây)")}><TextInput type="number" min={1} max={600} value={Number.isFinite(value("esp32_poll_seconds")) ? value("esp32_poll_seconds") : ""} onChange={(event) => set("esp32_poll_seconds", event.target.value === "" ? Number.NaN : Number(event.target.value))} /></Field>
-          </div>
-          <div className="grid grid-cols-[1fr_auto] items-end gap-3 pt-3">
-            <Field label={t("Mã truy cập thiết bị (tùy chọn)")} hint={stored.esp32_token_set ? t("Đã lưu một mã. Nhập mã mới để thay thế.") : t("Gửi kèm header X-Device-Token nếu firmware yêu cầu.")}>
-              <TextInput type="password" value={token} autoComplete="off" maxLength={200} placeholder={stored.esp32_token_set ? "••••••••" : ""} onChange={(event) => setToken(event.target.value)} />
-            </Field>
-            <PrimaryButton variant="secondary" icon={PlugZap} loading={testing} className="mb-[26px]" onClick={() => void testDevice()}>{t("Thử kết nối")}</PrimaryButton>
-          </div>
-          {testResult && (
-            <p role="status" className={`mt-1 rounded-2xl px-4 py-3 text-[13px] font-medium ${testResult.ok ? "bg-success-soft text-success" : "bg-danger-soft text-danger"}`}>{testResult.text}</p>
-          )}
-          <div className="mt-4"><Note>{t("Khi chưa kết nối, ứng dụng hiển thị “Chưa kết nối” và không tự tạo số đo. Lệnh điều khiển chỉ được gửi nếu firmware khai báo hỗ trợ.")}</Note></div>
+          <div className="mt-4"><Note>{t("Thêm thiết bị, lấy token, gửi lệnh (còi, đọc cảm biến…) và theo dõi phản hồi ACK ở Quản trị → Thiết bị. Đổi ngưỡng môi trường ở trên sẽ tự gửi xuống mọi ESP32 hỗ trợ để còi vẫn cảnh báo khi mất Internet.")}</Note></div>
         </Section>
 
         <CatalogSection />
+        <BarcodeSection />
+        <AiSection />
 
         <Section title={t("Camera")}>
           <Row icon={Camera} label={t("Camera mặc định")} hint={cameras.length === 0 ? t("Không tìm thấy camera nào") : cameras.some((c) => c.label) ? undefined : t("Tên camera hiện sau khi cấp quyền ở trang Quét thuốc.")}>
@@ -378,19 +558,19 @@ export function SettingsPage() {
           </Row>
         </Section>
 
-        <Section title={t("Cấu hình OCR")} hint={t("PaddleOCR chạy cục bộ trên máy. Engine PaddlePaddle dùng GPU NVIDIA nếu có, không có thì chạy CPU; ONNX Runtime luôn chạy CPU.")}
+        <Section title={t("Cấu hình OCR")} hint={t("PaddleOCR chạy trên máy chủ Mini PC cho mọi lượt quét (ứng dụng Windows và điện thoại). Engine PaddlePaddle dùng GPU NVIDIA nếu có, không có thì chạy CPU; ONNX Runtime luôn chạy CPU.")}
           action={ocrData && (ocrData.state === "ready" ? <StatusIndicator tone="success" size="sm" icon={CircleCheck}>{t("Sẵn sàng")}</StatusIndicator>
             : ocrData.state === "loading" ? <StatusIndicator tone="info" size="sm" icon={LoaderCircle}>{t("Đang nạp")}</StatusIndicator>
             : ocrData.state === "error" ? <StatusIndicator tone="danger" size="sm" icon={TriangleAlert}>{t("Lỗi")}</StatusIndicator>
             : <StatusIndicator tone="neutral" size="sm">{t("Chưa nạp")}</StatusIndicator>)}>
-          <Row icon={Cpu} label={t("Engine suy luận")} hint={value("ocr_engine") === "paddle" && deps && !deps.paddle ? t("Chưa cài PaddlePaddle trên máy này.") : undefined}>
+          <Row icon={Cpu} label={t("Engine suy luận")} hint={value("ocr_engine") === "paddle" && deps && !deps.paddle ? t("Chưa cài PaddlePaddle trên máy chủ.") : undefined}>
             <Select value={value("ocr_engine")} className="!h-10 !w-[330px] max-w-full" aria-label={t("Engine suy luận")} onChange={(event) => set("ocr_engine", event.target.value as AppSettings["ocr_engine"])}>
               <option value="onnxruntime">ONNX Runtime ({t("khuyến nghị cho CPU")})</option>
               <option value="paddle">PaddlePaddle{deps?.paddle_gpu ? " (GPU)" : ""}{deps && !deps.paddle ? ` (${t("chưa cài")})` : ""}</option>
             </Select>
           </Row>
           <Row icon={Zap} label={t("Thiết bị chạy")}
-            hint={value("ocr_engine") !== "paddle" ? t("ONNX Runtime luôn chạy trên CPU.") : deps && deps.paddle && !deps.paddle_gpu ? t("PaddlePaddle trên máy này là bản CPU.") : undefined}>
+            hint={value("ocr_engine") !== "paddle" ? t("ONNX Runtime luôn chạy trên CPU.") : deps && deps.paddle && !deps.paddle_gpu ? t("PaddlePaddle trên máy chủ là bản CPU.") : undefined}>
             <Select value={value("ocr_engine") === "paddle" ? value("ocr_device") : "cpu"} className="!h-10 !w-[330px] max-w-full" aria-label={t("Thiết bị chạy")}
               disabled={value("ocr_engine") !== "paddle"} onChange={(event) => set("ocr_device", event.target.value as AppSettings["ocr_device"])}>
               <option value="auto">{t("Tự động (GPU nếu có)")}</option>
@@ -431,7 +611,7 @@ export function SettingsPage() {
                 </p>
               )}
               {ocrData.engine.device_note && <p className="mt-1 text-warning-ink">{ocrData.engine.device_note}</p>}
-              {ocrData.engine.models_available_offline === false && <p className="mt-1 text-warning-ink">{t("Mô hình chưa có trên máy: lần nạp đầu cần Internet, hoặc chạy scripts/download_ocr_models.py.")}</p>}
+              {ocrData.engine.models_available_offline === false && <p className="mt-1 text-warning-ink">{t("Mô hình chưa có trên máy chủ: lần nạp đầu cần Internet, hoặc chạy scripts/download_ocr_models.py trên Mini PC.")}</p>}
               {ocrData.error && <p className="mt-1 break-words text-danger">{ocrData.error}</p>}
               <PrimaryButton variant="soft" size="sm" className="mt-3" icon={RefreshCw} disabled={ocrData.state === "loading" || dirtyKeys > 0}
                 onClick={() => void api.ocrWarmup().then(() => ocr.refetch()).catch((e) => toast.error(t("Không nạp được OCR"), errorMessage(e)))}>
@@ -487,7 +667,8 @@ export function SettingsPage() {
           <Row icon={Languages} label={t("Ngôn ngữ")} hint={t("Nội dung do hệ thống sinh ra (cảnh báo, lịch sử) luôn là tiếng Việt.")}>
             <Segmented size="sm" value={value("language")} onChange={(v) => set("language", v)} options={[{ value: "vi", label: "Tiếng Việt" }, { value: "en", label: "English" }]} />
           </Row>
-          <Row icon={ShieldCheck} label={t("Phiên bản")}><span className="text-sm tabular-nums text-muted">{window.smc?.appVersion ?? "1.0.0"}</span></Row>
+          <Row icon={ShieldCheck} label={t("Phiên bản")}><span className="text-sm tabular-nums text-muted">{t("Ứng dụng")} {window.smc?.appVersion ?? "2.0.0"}{health ? ` · ${t("Máy chủ")} ${health.version}` : ""}</span></Row>
+          <Row icon={Server} label={t("Máy chủ")}><span className="max-w-[320px] truncate text-sm text-muted">{connectionInfo().baseUrl}</span></Row>
         </Section>
 
         <BackupSection />
@@ -496,7 +677,7 @@ export function SettingsPage() {
       {/* Hành động chính của trang: lưu mọi thay đổi */}
       <div className="fixed bottom-7 right-10 z-30 flex items-center gap-2.5 rounded-[22px] bg-surface/95 p-2 shadow-card ring-1 ring-line/60 backdrop-blur 3xl:right-12">
         {dirtyKeys > 0 && (
-          <PrimaryButton variant="secondary" size="lg" onClick={() => { setDraft({}); setToken(""); setTestResult(null); }}>{t("Hủy thay đổi")}</PrimaryButton>
+          <PrimaryButton variant="secondary" size="lg" onClick={() => setDraft({})}>{t("Hủy thay đổi")}</PrimaryButton>
         )}
         <PrimaryButton size="lg" icon={Check} loading={save.isPending} disabled={dirtyKeys === 0} onClick={submit} data-testid="save-settings">
           {dirtyKeys > 0 ? t("Lưu cài đặt ({count})", { count: dirtyKeys }) : t("Lưu cài đặt")}

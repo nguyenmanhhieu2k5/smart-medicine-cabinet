@@ -1,8 +1,8 @@
 """Truy vấn danh mục thuốc: xem chi tiết, tìm kiếm thủ công, truy xuất ứng viên.
 
 Không bao giờ tải toàn bộ ~55.000 bản ghi vào bộ nhớ: mọi truy vấn đi qua chỉ
-mục SQLite (bảng số đăng ký, FTS5 từ, FTS5 trigram) rồi mới xếp hạng bằng
-RapidFuzz trên tập ứng viên nhỏ.
+mục PostgreSQL (B-tree số đăng ký, GIN ``tsvector`` có trọng số, GIN ``pg_trgm``)
+để lấy một tập ứng viên nhỏ, rồi mới xếp hạng bằng RapidFuzz.
 """
 from __future__ import annotations
 
@@ -118,14 +118,32 @@ def medicine_detail(row: CatalogMedicine) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Truy vấn
 # --------------------------------------------------------------------------- #
-_FTS_WEIGHTS = "10.0, 4.0, 3.0, 1.0, 8.0"  # name, ingredient, strength, form, reg
+# Trọng số cột trong `search_vector` (xem models/catalog.py): A tên, B hoạt chất, C hàm lượng, D dạng bào chế + SĐK.
+COLUMN_WEIGHTS = {"name": "A", "ingredient": "B", "strength": "C", "form": "D", "reg": "D"}
+# ts_rank nhận trọng số theo thứ tự {D, C, B, A}.
+_RANK_WEIGHTS = "{0.25, 0.3, 0.4, 1.0}"
 # Chuỗi (đã bỏ dấu cách/gạch) trông giống số đăng ký: "VN2016916", "893110205525".
 _REG_QUERY = re.compile(r"^(?:[A-Z]{1,4}\d[A-Z0-9]{4,11}|\d{6,12})$")
+_LEXEME_SPLIT = re.compile(r"[^a-z0-9]+")
 RELAXED_MIN_SCORE = 60.0  # ở chế độ nới lỏng/gần đúng, bỏ các kết quả quá khác từ khóa
+TRGM_THRESHOLD = 0.3  # ngưỡng word_similarity khi truy xuất ứng viên gần đúng
 
 
-def _quote(token: str) -> str:
-    return '"' + token.replace('"', "") + '"'
+def ts_term(token: str, *, prefix: bool = False, column: str | None = None) -> str | None:
+    """Một từ khóa → biểu thức tsquery (không qua bộ tách từ của PostgreSQL).
+
+    Token chứa ký tự phân cách (vd "vd-34703") thành cụm liền kề ``vd <-> 34703``,
+    giống truy vấn cụm từ trong FTS5 trước đây. Chỉ giữ [a-z0-9] nên không cần thoát ký tự.
+    """
+    parts = [p for p in _LEXEME_SPLIT.split(fts_safe(token.lower())) if p]
+    if not parts:
+        return None
+    weight = COLUMN_WEIGHTS.get(column or "", "")
+    out = []
+    for i, part in enumerate(parts):
+        label = (":*" if prefix and i == len(parts) - 1 else "") + weight
+        out.append(part + (f":{label}" if label and not label.startswith(":") else label))
+    return out[0] if len(out) == 1 else "(" + " <-> ".join(out) + ")"
 
 
 class CatalogRepository:
@@ -142,11 +160,8 @@ class CatalogRepository:
     def get_many(self, ids: Sequence[int]) -> list[CatalogMedicine]:
         if not ids:
             return []
-        rows: list[CatalogMedicine] = []
         id_list = list(dict.fromkeys(ids))
-        for i in range(0, len(id_list), 500):
-            part = id_list[i : i + 500]
-            rows.extend(self.s.scalars(select(CatalogMedicine).where(CatalogMedicine.id.in_(part))).all())
+        rows = list(self.s.scalars(select(CatalogMedicine).where(CatalogMedicine.id.in_(id_list))).all())
         order = {mid: n for n, mid in enumerate(id_list)}
         rows.sort(key=lambda r: order.get(r.id, 0))
         return rows
@@ -157,30 +172,33 @@ class CatalogRepository:
     # ---- số đăng ký ------------------------------------------------------ #
     def ids_by_reg(self, reg_norms: Iterable[str]) -> dict[str, list[int]]:
         """reg_norm → danh sách id (một số đăng ký có thể thuộc nhiều bản ghi)."""
+        regs = list(dict.fromkeys(r for r in reg_norms if r))
+        if not regs:
+            return {}
         out: dict[str, list[int]] = {}
-        for reg in reg_norms:
-            rows = self.s.execute(
-                text("SELECT medicine_id FROM catalog_regs WHERE reg_norm = :r"), {"r": reg}
-            ).all()
-            if rows:
-                out[reg] = [r[0] for r in rows]
+        rows = self.s.execute(
+            text("SELECT reg_norm, medicine_id FROM medicine_catalog_regs WHERE reg_norm = ANY(:regs) ORDER BY medicine_id"),
+            {"regs": regs},
+        ).all()
+        for reg, mid in rows:
+            out.setdefault(reg, []).append(mid)
         return out
 
     def ids_by_reg_fuzzy(self, reg_norm: str) -> list[tuple[int, str, float]]:
         """Tìm số đăng ký gần giống (OCR sai 1–2 ký tự). Trả về (id, reg, độ giống)."""
         hits: dict[tuple[int, str], float] = {}
-        for variant in reg_ocr_variants(reg_norm):
-            exact = self.ids_by_reg([variant])
-            for reg, ids in exact.items():
-                for mid in ids:
-                    hits[(mid, reg)] = max(hits.get((mid, reg), 0), 97.0 if variant != reg_norm else 100.0)
+        variants = list(reg_ocr_variants(reg_norm))
+        exact = self.ids_by_reg(variants)
+        for variant in variants:
+            for mid in exact.get(variant, []):
+                hits[(mid, variant)] = max(hits.get((mid, variant), 0), 97.0 if variant != reg_norm else 100.0)
         if hits or len(reg_norm) < 7:
             return [(mid, reg, score) for (mid, reg), score in hits.items()]
         # Cùng tiền tố 4 ký tự và độ dài gần bằng, rồi so bằng RapidFuzz.
         prefix = reg_norm[:4]
         rows = self.s.execute(
             text(
-                "SELECT medicine_id, reg_norm FROM catalog_regs "
+                "SELECT medicine_id, reg_norm FROM medicine_catalog_regs "
                 "WHERE reg_norm LIKE :p AND length(reg_norm) BETWEEN :lo AND :hi LIMIT 4000"
             ),
             {"p": prefix + "%", "lo": len(reg_norm) - 1, "hi": len(reg_norm) + 1},
@@ -191,49 +209,36 @@ class CatalogRepository:
                 hits[(mid, reg)] = score
         return [(mid, reg, score) for (mid, reg), score in hits.items()]
 
-    # ---- FTS ------------------------------------------------------------- #
-    def _fts(self, match: str, limit: int) -> list[int]:
-        try:
-            rows = self.s.execute(
-                text(
-                    f"SELECT rowid FROM catalog_fts WHERE catalog_fts MATCH :q "
-                    f"ORDER BY bm25(catalog_fts, {_FTS_WEIGHTS}) LIMIT :n"
-                ),
-                {"q": match, "n": limit},
-            ).all()
-        except Exception:  # cú pháp MATCH không hợp lệ → coi như không có kết quả
+    # ---- toàn văn (tsvector) --------------------------------------------- #
+    def _fts(self, tsquery: str, limit: int) -> list[int]:
+        if not tsquery:
             return []
+        rows = self.s.execute(
+            text(
+                "SELECT id FROM medicine_catalog WHERE search_vector @@ CAST(:q AS tsquery) "
+                f"ORDER BY ts_rank('{_RANK_WEIGHTS}', search_vector, CAST(:q AS tsquery)) DESC, id LIMIT :n"
+            ),
+            {"q": tsquery, "n": limit},
+        ).all()
         return [r[0] for r in rows]
 
     def fts_any(self, tokens: Iterable[str], column: str | None = None, limit: int = 60, prefix: bool = False) -> list[int]:
-        toks = [fts_safe(t) for t in dict.fromkeys(tokens) if t]
-        if not toks:
+        terms = [t for t in (ts_term(tok, prefix=prefix, column=column) for tok in dict.fromkeys(tokens) if tok) if t]
+        if not terms:
             return []
-        body = " OR ".join(_quote(t) + ("*" if prefix else "") for t in toks[:24])
-        match = f"{column} : ({body})" if column else body
-        return self._fts(match, limit)
+        return self._fts(" | ".join(terms[:24]), limit)
 
     def trigram(self, phrase: str, column: str = "name", limit: int = 40) -> list[int]:
-        """Ứng viên có nhiều bộ ba ký tự chung với `phrase` (chịu được lỗi OCR)."""
-        grams: dict[str, None] = {}
-        for word in phrase.split():
-            if len(word) < 3:
-                continue
-            for i in range(len(word) - 2):
-                grams.setdefault(word[i : i + 3], None)
-        if not grams:
+        """Ứng viên có tên/hoạt chất gần giống `phrase` theo bộ ba ký tự (chịu được lỗi OCR)."""
+        phrase = " ".join(w for w in phrase.split() if len(w) >= 3)
+        if len(phrase) < 3:
             return []
-        body = " OR ".join(_quote(g) for g in list(grams)[:28])
-        try:
-            rows = self.s.execute(
-                text(
-                    f"SELECT rowid FROM catalog_trgm WHERE catalog_trgm MATCH :q "
-                    f"ORDER BY bm25(catalog_trgm, 10.0, 3.0) LIMIT :n"
-                ),
-                {"q": f"{column} : ({body})", "n": limit},
-            ).all()
-        except Exception:
-            return []
+        col = "trgm_ingredient" if column == "ingredient" else "trgm_name"
+        self.s.execute(text("SELECT set_config('pg_trgm.word_similarity_threshold', :t, true)"), {"t": str(TRGM_THRESHOLD)})
+        rows = self.s.execute(
+            text(f"SELECT id FROM medicine_catalog WHERE :q <% {col} ORDER BY word_similarity(:q, {col}) DESC, id LIMIT :n"),
+            {"q": phrase, "n": limit},
+        ).all()
         return [r[0] for r in rows]
 
     # ---- tìm kiếm thủ công ----------------------------------------------- #
@@ -256,7 +261,7 @@ class CatalogRepository:
                     ordered[mid] = max(ordered.get(mid, 0), 1000 + score)
             if len(reg_query) >= 5:
                 rows = self.s.execute(
-                    text("SELECT medicine_id FROM catalog_regs WHERE reg_norm LIKE :p LIMIT 50"),
+                    text("SELECT medicine_id FROM medicine_catalog_regs WHERE reg_norm LIKE :p LIMIT 50"),
                     {"p": reg_query + "%"},
                 ).all()
                 for (mid,) in rows:
@@ -268,15 +273,18 @@ class CatalogRepository:
         tokens = q_norm.split()
         clauses: list[str] = []
         for i, tok in enumerate(tokens):
-            safe = fts_safe(tok)
             is_last = i == len(tokens) - 1
             canon = [q.token for q in parse_quantities(tok)]
             if canon:
-                alts = [f"strength : {_quote(fts_safe(canon[0]))}", _quote(safe) + "*"]
-                clauses.append("(" + " OR ".join(alts) + ")")
+                alts = [ts_term(canon[0], column="strength"), ts_term(tok, prefix=True)]
+                alts = [a for a in alts if a]
+                if alts:
+                    clauses.append("(" + " | ".join(alts) + ")")
             else:
-                clauses.append(_quote(safe) + ("*" if is_last or len(safe) >= 3 else ""))
-        candidates = self._fts(" AND ".join(clauses), 400)
+                term = ts_term(tok, prefix=is_last or len(fts_safe(tok)) >= 3)
+                if term:
+                    clauses.append(term)
+        candidates = self._fts(" & ".join(clauses), 400)
         if mode == "registration":
             candidates = candidates[:50]
         elif not candidates and len(tokens) > 1:

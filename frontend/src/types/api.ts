@@ -1,3 +1,5 @@
+import type { AccountInfo } from "@/types/desktop";
+
 // Kiểu dữ liệu khớp với JSON của backend (backend/app/api).
 
 export interface MedicineSummary {
@@ -288,7 +290,7 @@ export interface AlertList {
   by_category: Record<AlertCategory, number>;
 }
 
-export type HistoryGroup = "scan" | "cabinet" | "reminder" | "alert" | "system";
+export type HistoryGroup = "scan" | "cabinet" | "reminder" | "alert" | "system" | "device";
 
 export interface HistoryEvent {
   id: number;
@@ -313,7 +315,8 @@ export interface HistoryList {
 export interface DeviceStatus {
   enabled: boolean;
   configured: boolean;
-  mode: "http" | "websocket";
+  mode: "wss";
+  device_id: string | null;
   state: "disabled" | "connecting" | "connected" | "stale" | "disconnected";
   temperature: number | null;
   humidity: number | null;
@@ -350,15 +353,6 @@ export interface AppSettings {
   humidity_max: number;
   expiry_warning_days: number;
   low_stock_threshold: number;
-  esp32_enabled: boolean;
-  esp32_mode: "http" | "websocket";
-  esp32_host: string;
-  esp32_port: number;
-  esp32_path: string;
-  esp32_poll_seconds: number;
-  esp32_timeout_seconds: number;
-  esp32_stale_seconds: number;
-  esp32_token_set: boolean;
   ocr_engine: "onnxruntime" | "paddle";
   ocr_profile: "v6_small" | "v6_tiny" | "v6_medium" | "v5_latin";
   ocr_device: "auto" | "gpu" | "cpu";
@@ -384,7 +378,7 @@ export interface AppSettings {
   profile_avatar: string | null;
 }
 
-export type SettingsPatch = Partial<Omit<AppSettings, "esp32_token_set" | "profile_avatar">> & { esp32_token?: string | null };
+export type SettingsPatch = Partial<Omit<AppSettings, "profile_avatar">>;
 
 export interface SettingsResponse {
   settings: AppSettings;
@@ -441,14 +435,203 @@ export interface Profile {
   name: string;
   email: string;
   role: string;
+  phone: string | null;
   has_avatar: boolean;
-  auth: { provider: "local" | "supabase"; configured: boolean; signed_in: boolean; email: string | null; user_id: string | null };
+  account: AccountInfo;
+  auth: { provider: "server"; configured: boolean; signed_in: boolean; email: string | null; user_id: string | null };
 }
 
 export interface BackupInfo {
   name: string;
   size: number;
   created_at: string;
+  label: string;
+  automatic: boolean;
+}
+
+export interface BackupList {
+  items: BackupInfo[];
+  directory: string;
+  copy_directory: string | null;
+  keep_automatic: number;
+  last_automatic: (Partial<BackupInfo> & { ok?: boolean; error?: string | null; at?: string }) | null;
+  restore_hint: string;
+}
+
+// ------------------------------------------------------------------ //
+// Quản trị: tài khoản, nhật ký, máy chủ
+// ------------------------------------------------------------------ //
+export type RoleCode = "ADMIN" | "SCANNER";
+
+export interface AdminUser extends AccountInfo {
+  active_sessions?: number;
+}
+
+export interface UserList {
+  items: AdminUser[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface UserSessionInfo {
+  id: string;
+  audience: "admin" | "scanner";
+  client: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  created_at: string;
+  last_used_at: string;
+}
+
+export interface UserCreateInput {
+  email: string;
+  password: string;
+  full_name: string;
+  phone?: string | null;
+  role: RoleCode;
+}
+
+export interface UserPatchInput {
+  full_name?: string;
+  phone?: string | null;
+  role?: RoleCode;
+  is_active?: boolean;
+}
+
+export interface AuditEntry {
+  id: number;
+  created_at: string;
+  actor: string | null;
+  channel: string;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  success: boolean;
+  ip: string | null;
+  detail: Record<string, unknown> | null;
+}
+
+export interface AdminScan {
+  id: string;
+  job_id: string | null;
+  user_email: string;
+  status: string;
+  title: string;
+  subtitle: string | null;
+  candidate_count: number;
+  top_medicine_id: number | null;
+  created_at: string;
+}
+
+export type ServiceState = "running" | "stopped" | "not_installed" | "unknown" | null;
+
+export interface SystemStatus {
+  version: string;
+  time: string;
+  uptime_seconds: number;
+  database: {
+    ok: boolean;
+    url: string;
+    version?: string;
+    size_bytes?: number;
+    catalog_count?: number;
+    users?: number;
+    devices?: number;
+    schema_revision?: string | null;
+    error?: string;
+    [key: string]: unknown;
+  };
+  ocr: OcrStatus;
+  devices: { online: string[]; online_count: number };
+  host: {
+    cpu_percent: number;
+    cpu_count: number;
+    memory_total: number;
+    memory_used: number;
+    memory_percent: number;
+    disk_total: number;
+    disk_free: number;
+    disk_percent: number;
+    boot_time: string;
+  };
+  services: Record<"postgresql" | "cloudflared" | "tailscale" | "server", ServiceState>;
+  backup: { last: (Partial<BackupInfo> & { ok?: boolean; error?: string | null; at?: string }) | null; directory: string };
+  public_base_url: string | null;
+}
+
+// ------------------------------------------------------------------ //
+// Thiết bị ESP32 + lệnh điều khiển qua Internet
+// ------------------------------------------------------------------ //
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  token_hint: string;
+  firmware: string | null;
+  capabilities: string[];
+  supported_actions: string[];
+  is_active: boolean;
+  is_primary: boolean;
+  online: boolean;
+  last_seen_at: string | null;
+  last_ip: string | null;
+  last_state: Record<string, unknown> | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface DeviceConnection {
+  websocket_url: string | null;
+  public_base_url: string | null;
+  note: string | null;
+}
+
+export interface DeviceList {
+  items: DeviceInfo[];
+  connection: DeviceConnection;
+}
+
+export interface DeviceTokenResult {
+  device: DeviceInfo;
+  /** Token thiết bị — chỉ hiển thị MỘT lần, máy chủ chỉ lưu băm SHA-256. */
+  token: string;
+  connection: DeviceConnection;
+}
+
+export type CommandStatus = "pending" | "sent" | "acknowledged" | "applied" | "failed" | "timed_out" | "cancelled";
+
+export interface CommandAck {
+  status: "received" | "applied" | "failed";
+  message: string | null;
+  payload: Record<string, unknown> | null;
+  received_at: string;
+}
+
+export interface DeviceCommand {
+  id: string;
+  device_id: string;
+  action: string;
+  action_label: string;
+  payload: Record<string, unknown>;
+  status: CommandStatus;
+  created_at: string;
+  expires_at: string;
+  sent_at: string | null;
+  acknowledged_at: string | null;
+  completed_at: string | null;
+  attempts: number;
+  error: string | null;
+  result: Record<string, unknown> | null;
+  final: boolean;
+  delivered?: boolean;
+  note?: string;
+  acks?: CommandAck[];
+}
+
+export interface ActionSpec {
+  action: string;
+  label: string;
+  schema: Record<string, unknown>;
 }
 
 export interface PendingNotifications {
@@ -456,4 +639,90 @@ export interface PendingNotifications {
   windows_notifications: boolean;
   sound: boolean;
   unhandled_alerts: number;
+}
+
+// ---- Mã vạch → thuốc trong danh mục ---------------------------------------------------- //
+export type BarcodeIssueReason = "ambiguous" | "unmatched" | "invalid" | "internal" | "conflict";
+
+export interface BarcodeImportReport {
+  dry_run: boolean;
+  file_name: string;
+  sheet: string;
+  columns: Partial<Record<"barcode" | "registration" | "name" | "strength" | "unit" | "manufacturer", string>>;
+  catalog_total: number;
+  rows_total: number;
+  rows_with_barcode: number;
+  codes_total: number;
+  matched_rows: number;
+  by_registration: number;
+  by_name: number;
+  linked: number;
+  unchanged: number;
+  conflicts: number;
+  ambiguous: number;
+  unmatched: number;
+  invalid: number;
+  internal: number;
+  import_id: number | null;
+  issues: { row: number; barcode: string; registration: string | null; name: string | null; reason: BarcodeIssueReason; message: string }[];
+  samples: { row: number; barcode: string; medicine_id: number; medicine_name: string; method: "registration" | "name" }[];
+}
+
+export interface BarcodeStatus {
+  barcodes: number;
+  medicines_with_barcode: number;
+  catalog_total: number;
+  last_import: {
+    id: number; file_name: string; rows_total: number; linked: number; unchanged: number; conflicts: number;
+    unmatched: number; invalid: number; started_by: string | null; created_at: string;
+  } | null;
+}
+
+export interface BarcodeLookup {
+  status: "found" | "not_found" | "invalid" | "internal" | "gtin";
+  code: string;
+  gtin: string | null;
+  message: string;
+  medicine: MedicineSummary | null;
+  link: { source: "excel" | "csdlduoc"; match_method: "registration" | "name"; unit: string | null; import_id: number | null } | null;
+}
+
+// ---- AI tra cứu trên mạng (Gemini + Google Search; khóa chỉ nằm trên máy chủ) ---------------- //
+export interface AiMedicineInfo {
+  found: boolean;
+  ten_thuoc: string | null;
+  hoat_chat: string | null;
+  ham_luong: string | null;
+  dang_bao_che: string | null;
+  quy_cach: string | null;
+  so_dang_ky: string | null;
+  nha_san_xuat: string | null;
+  nuoc_san_xuat: string | null;
+  do_tin_cay: "cao" | "trung_binh" | "thap";
+  ghi_chu: string | null;
+}
+
+export interface AiLookupResult {
+  status: "found" | "not_found" | "unavailable" | "not_configured";
+  kind: "barcode" | "qr" | "scan";
+  /** web: AI + Google Search; offline: AI chỉ đọc ảnh/mã; search: tìm kiếm web (Tavily) không AI; text: đọc số đăng ký trong mã. */
+  mode: "web" | "offline" | "search" | "text" | null;
+  model: string | null;
+  cached: boolean;
+  elapsed_ms: number;
+  result: AiMedicineInfo | null;
+  sources: { title: string; url: string }[];
+  catalog_matches: (MedicineSummary & { match_by: "registration" | "name" })[];
+  message: string;
+  reason: string | null;
+  notice: string;
+}
+
+export interface AiStatus {
+  configured: boolean;
+  models: string[];
+  search_available: boolean;
+  last_error: string | null;
+  /** Tra mã vạch trên mạng không dùng AI (Tavily). */
+  web_search?: { provider: string; configured: boolean; last_error: string | null };
 }

@@ -11,13 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import bad_request, get_ctx, not_found
+from app.auth.deps import get_principal
+from app.auth.service import Principal
 from app.core import clock
 from app.core.context import AppContext
 from app.models import CabinetItem, Reminder
 from app.schemas.cabinet import CabinetCreate, CabinetUpdate, QuantityAdjust
 from app.services import history, settings_store
 from app.services.alerts import engine as alert_engine
-from app.services.cabinet import format_quantity, serialize_item
+from app.services.cabinet import format_quantity, log_inventory, serialize_item
 from app.services.medicine_matcher.catalog import CatalogRepository, medicine_detail, strength_display
 from app.services.medicine_matcher.normalize import clean_cell, normalize_text
 
@@ -153,7 +155,7 @@ def export(
 
 
 @router.post("/medicines", status_code=201)
-def create_item(body: CabinetCreate, ctx: AppContext = Depends(get_ctx)) -> dict:
+def create_item(body: CabinetCreate, ctx: AppContext = Depends(get_ctx), principal: Principal = Depends(get_principal)) -> dict:
     now = clock.now()
     with ctx.db.session() as s:
         settings = settings_store.load_settings(s)
@@ -183,10 +185,12 @@ def create_item(body: CabinetCreate, ctx: AppContext = Depends(get_ctx)) -> dict
         job = ctx.ocr.get(body.scan_job_id) if body.scan_job_id else None
         item = CabinetItem(
             catalog_id=body.catalog_id, quantity=body.quantity, source="scan" if job else "manual",
-            created_at=now, updated_at=now, **fields,
+            created_at=now, updated_at=now, created_by=principal.user_id, updated_by=principal.user_id, **fields,
         )
         s.add(item)
         s.flush()
+        log_inventory(s, item, "create", None, item.quantity, user_id=principal.user_id,
+                      note="Từ kết quả quét" if job else None)
         if job is not None and job.image_path and job.image_path.exists() and settings.ocr_save_scan_images:
             target = ctx.settings.images_dir / f"cabinet_{item.id}.jpg"
             shutil.copyfile(job.image_path, target)
@@ -239,7 +243,7 @@ def get_item_image(item_id: int, ctx: AppContext = Depends(get_ctx)) -> FileResp
 
 
 @router.patch("/medicines/{item_id}")
-def update_item(item_id: int, body: CabinetUpdate, ctx: AppContext = Depends(get_ctx)) -> dict:
+def update_item(item_id: int, body: CabinetUpdate, ctx: AppContext = Depends(get_ctx), principal: Principal = Depends(get_principal)) -> dict:
     changes = body.model_dump(exclude_unset=True)
     with ctx.db.session() as s:
         item = _get(s, item_id)
@@ -262,8 +266,10 @@ def update_item(item_id: int, body: CabinetUpdate, ctx: AppContext = Depends(get
                     changed.append(key)
         if changed:
             item.updated_at = clock.now()
+            item.updated_by = principal.user_id
             only_quantity = changed == ["quantity"]
             if "quantity" in changed:
+                log_inventory(s, item, "adjust", old_quantity, item.quantity, user_id=principal.user_id, note="Sửa trực tiếp")
                 history.record(
                     s, "cabinet", "quantity_change", "Thay đổi số lượng",
                     f"{item.name}: {format_quantity(old_quantity)} → {format_quantity(item.quantity)} {item.unit}",
@@ -280,7 +286,7 @@ def update_item(item_id: int, body: CabinetUpdate, ctx: AppContext = Depends(get
 
 
 @router.post("/medicines/{item_id}/adjust")
-def adjust_quantity(item_id: int, body: QuantityAdjust, ctx: AppContext = Depends(get_ctx)) -> dict:
+def adjust_quantity(item_id: int, body: QuantityAdjust, ctx: AppContext = Depends(get_ctx), principal: Principal = Depends(get_principal)) -> dict:
     with ctx.db.session() as s:
         item = _get(s, item_id)
         settings = settings_store.load_settings(s)
@@ -291,6 +297,9 @@ def adjust_quantity(item_id: int, body: QuantityAdjust, ctx: AppContext = Depend
             old = item.quantity
             item.quantity = round(new_quantity, 3)
             item.updated_at = clock.now()
+            item.updated_by = principal.user_id
+            log_inventory(s, item, "add" if body.delta > 0 else "consume", old, item.quantity,
+                          user_id=principal.user_id, note=body.reason)
             history.record(
                 s, "cabinet", "quantity_change", "Thay đổi số lượng",
                 f"{item.name}: {format_quantity(old)} → {format_quantity(item.quantity)} {item.unit}"
@@ -302,7 +311,7 @@ def adjust_quantity(item_id: int, body: QuantityAdjust, ctx: AppContext = Depend
 
 
 @router.delete("/medicines/{item_id}")
-def delete_item(item_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
+def delete_item(item_id: int, ctx: AppContext = Depends(get_ctx), principal: Principal = Depends(get_principal)) -> dict:
     with ctx.db.session() as s:
         item = _get(s, item_id)
         settings = settings_store.load_settings(s)
@@ -310,6 +319,8 @@ def delete_item(item_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
         # Lời nhắc vẫn được giữ lại (theo tên) nhưng không còn liên kết tới thuốc đã xóa.
         for reminder in s.scalars(select(Reminder).where(Reminder.cabinet_item_id == item.id)).all():
             reminder.cabinet_item_id = None
+        log_inventory(s, item, "delete", item.quantity, None, user_id=principal.user_id)
+        s.flush()
         s.delete(item)
         s.flush()
         history.record(s, "cabinet", "cabinet_delete", "Xóa thuốc", f"Đã xóa {name} khỏi tủ", {"cabinet_item_id": item_id})

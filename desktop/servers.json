@@ -1,0 +1,7 @@
+{
+  "_ghi_chu": "Địa chỉ API quản trị gài sẵn, theo thứ tự ưu tiên. Ứng dụng tự chọn địa chỉ đầu tiên trả lời (như ứng dụng điện thoại) — người dùng không phải nhập. Tailscale: tailscale serve :443 → 127.0.0.1:8001 trên Mini PC. Đổi Mini PC/tailnet thì sửa danh sách này rồi build lại (hoặc đặt biến môi trường SMC_SERVER_URL).",
+  "servers": [
+    "https://desktop-rt32kff.tail43c7d5.ts.net",
+    "http://127.0.0.1:8001"
+  ]
+}

@@ -1,0 +1,18 @@
+# Cloudflare Tunnel quản lý cục bộ (Cách 3 — chỉ khi không dùng token từ dashboard).
+#   cloudflared tunnel login
+#   cloudflared tunnel create smart-medicine
+#   cloudflared tunnel route dns smart-medicine api.<tên-miền>
+# Chép file này thành %USERPROFILE%\.cloudflared\config.yml, thay <...>, rồi:
+#   cloudflared tunnel run smart-medicine            (chạy thử)
+#   cloudflared service install                      (cài dịch vụ; dịch vụ chạy bằng LocalSystem nên cần chép
+#                                                    config.yml + <UUID>.json vào C:\Windows\System32\config\systemprofile\.cloudflared\)
+tunnel: <TUNNEL-UUID>
+credentials-file: C:\Users\<USER>\.cloudflared\<TUNNEL-UUID>.json
+
+ingress:
+  # CHỈ Public API (cổng 8000). Không bao giờ thêm 127.0.0.1:8001 (Admin) vào đây.
+  - hostname: api.<tên-miền>
+    service: http://127.0.0.1:8000
+    originRequest:
+      connectTimeout: 10s
+  - service: http_status:404

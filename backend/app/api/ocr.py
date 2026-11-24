@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.api.deps import bad_request, get_ctx, not_found
+from app.auth.deps import get_principal
+from app.auth.service import Principal
 from app.core.context import AppContext
 from app.services.ocr.preprocess import ImageError
+from app.services.ocr.service import OcrBusy
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
@@ -20,25 +23,40 @@ async def submit(
     source: str = Form("upload", pattern="^(camera|upload)$"),
     crop: str | None = Form(None, description="JSON [x, y, w, h] theo tỉ lệ 0–1 của khung quét"),
     ctx: AppContext = Depends(get_ctx),
+    principal: Principal = Depends(get_principal),
 ) -> dict:
-    data = await file.read(MAX_IMAGE_BYTES + 1)
-    if len(data) > MAX_IMAGE_BYTES:
-        raise bad_request("Ảnh quá lớn (tối đa 25 MB).")
-    crop_rect = None
-    if crop:
-        try:
-            parsed = json.loads(crop)
-            if isinstance(parsed, list) and len(parsed) == 4:
-                crop_rect = [float(v) for v in parsed]
-        except (ValueError, TypeError):
-            raise bad_request("Tham số crop không hợp lệ.") from None
+    data = await read_image(file)
+    crop_rect = parse_crop(crop)
     if not ctx.ocr.enabled:
         raise bad_request("OCR đang tắt trong cấu hình hiện tại.")
     try:
-        job = ctx.ocr.submit(data, source=source, crop=crop_rect)
+        job = ctx.ocr.submit(data, source=source, crop=crop_rect, user_id=principal.user_id, channel="admin", actor=principal.email)
     except ImageError as exc:
         raise bad_request(str(exc)) from exc
+    except OcrBusy as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     return job.public()
+
+
+async def read_image(file: UploadFile) -> bytes:
+    data = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise bad_request("Ảnh quá lớn (tối đa 25 MB).")
+    if not data:
+        raise bad_request("Không nhận được ảnh.")
+    return data
+
+
+def parse_crop(crop: str | None) -> list[float] | None:
+    if not crop:
+        return None
+    try:
+        parsed = json.loads(crop)
+        if isinstance(parsed, list) and len(parsed) == 4:
+            return [float(v) for v in parsed]
+    except (ValueError, TypeError):
+        pass
+    raise bad_request("Tham số crop không hợp lệ.")
 
 
 @router.get("/status")
@@ -54,10 +72,10 @@ def warmup(ctx: AppContext = Depends(get_ctx)) -> dict:
 
 @router.get("/jobs/{job_id}")
 def job(job_id: str, ctx: AppContext = Depends(get_ctx)) -> dict:
-    found = ctx.ocr.get(job_id)
+    found = ctx.ocr.load(job_id)
     if found is None:
         raise not_found("Không tìm thấy lần quét này (có thể đã hết hạn).")
-    return found.public()
+    return found
 
 
 @router.get("/jobs/{job_id}/image")

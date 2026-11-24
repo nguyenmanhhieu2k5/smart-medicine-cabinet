@@ -44,7 +44,7 @@ class CabinetBase(BaseModel):
 class CabinetCreate(CabinetBase):
     catalog_id: int | None = Field(None, ge=0)
     quantity: float = Field(0, ge=0, le=1_000_000)
-    scan_job_id: str | None = Field(None, max_length=32)
+    scan_job_id: str | None = Field(None, max_length=40)
 
 
 class CabinetUpdate(CabinetBase):

@@ -1,61 +1,169 @@
 import type {
-  AlertList, AppSettings, BackupInfo, CabinetInput, CabinetItem, CabinetList, CatalogStatus, DeviceStatus, Health,
-  HistoryEvent, HistoryList, MedicineDetail, OcrJob, OcrStatus, PendingNotifications, Profile, Reminder,
-  ReminderInput, Schedule, SearchResult, SensorPoint, SettingsPatch, SettingsResponse,
+  ActionSpec, AdminScan, AdminUser, AiLookupResult, AiStatus, AlertList, AppSettings, AuditEntry, BackupInfo, BackupList, BarcodeImportReport, BarcodeLookup,
+  BarcodeStatus, CabinetInput, CabinetItem,
+  CabinetList, CatalogStatus, DeviceCommand, DeviceConnection, DeviceInfo, DeviceList, DeviceStatus, DeviceTokenResult, Health,
+  HistoryEvent, HistoryList, MedicineDetail, OcrJob, OcrStatus, PendingNotifications, Profile, Reminder, ReminderInput, Schedule,
+  SearchResult, SensorPoint, SettingsPatch, SettingsResponse, SystemStatus, UserCreateInput, UserList, UserPatchInput,
+  UserSessionInfo,
 } from "@/types/api";
-import type { BackendInfo } from "@/types/desktop";
+import type { AccountInfo, BackendInfo } from "@/types/desktop";
 
-/** Lỗi API kèm thông báo tiếng Việt từ backend. */
+/** Lỗi API kèm thông báo tiếng Việt từ máy chủ. */
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
-const DEV_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://127.0.0.1:8756";
-let backend: { baseUrl: string; token: string } = { baseUrl: DEV_BASE, token: "" };
-let backendPromise: Promise<BackendInfo | null> | null = null;
+// --------------------------------------------------------------------------- //
+// Kết nối + phiên đăng nhập Admin
+//
+// Bản Windows (Electron): tiến trình chính đăng nhập và giữ refresh token (mã hóa DPAPI); giao diện chỉ nhận
+// access token ngắn hạn qua window.smc. Bản chạy trong trình duyệt (chỉ để phát triển): đăng nhập trực tiếp,
+// refresh token chỉ nằm trong bộ nhớ của trang.
+// --------------------------------------------------------------------------- //
+const DEV_BASE = ((import.meta.env.VITE_API_URL as string | undefined) ?? "http://127.0.0.1:8001").replace(/\/+$/, "");
+const DEV_CLIENT = "web-admin-dev";
+const REFRESH_MARGIN_MS = 60_000;
 
-/**
- * Lấy địa chỉ + token backend từ Electron (nếu có); trình duyệt dev dùng cổng mặc định.
- * Trong Electron, lời gọi này chờ tới khi dịch vụ nền sẵn sàng hoặc báo lỗi khởi động.
- */
-export function initBackend(): Promise<BackendInfo | null> {
-  if (!backendPromise) {
-    backendPromise = (async () => {
-      if (!window.smc) return null;
-      const info = await window.smc.getBackend();
-      if (info.baseUrl) backend = { baseUrl: info.baseUrl, token: info.token };
-      return info;
-    })();
-  }
-  return backendPromise;
+let current: BackendInfo = { state: "signed-out", baseUrl: DEV_BASE, token: "" };
+let devRefreshToken = "";
+let initPromise: Promise<BackendInfo> | null = null;
+let refreshPromise: Promise<BackendInfo> | null = null;
+const listeners = new Set<(info: BackendInfo) => void>();
+
+function publish(info: BackendInfo): BackendInfo {
+  current = info;
+  for (const listener of listeners) listener(info);
+  return info;
 }
+
+/** Theo dõi thay đổi kết nối/phiên (đăng xuất, phiên hết hạn…). */
+export function onConnectionChange(listener: (info: BackendInfo) => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function connectionInfo(): BackendInfo {
+  return current;
+}
+
+export function currentUser(): AccountInfo | null {
+  return current.user ?? null;
+}
+
+function signedOut(error?: string | null): BackendInfo {
+  return { state: "signed-out", baseUrl: current.baseUrl, token: "", user: null, email: current.email ?? null, error: error ?? null };
+}
+
+async function devAuth(path: "/auth/login" | "/auth/refresh", body: Record<string, string>): Promise<BackendInfo> {
+  let response: Response;
+  try {
+    response = await fetch(`${current.baseUrl}/api${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-SMC-Client": DEV_CLIENT },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    const error = `Không kết nối được máy chủ ${current.baseUrl}.`;
+    return devRefreshToken ? { ...current, state: "error", token: "", error } : signedOut(error);
+  }
+  const data = (await response.json().catch(() => null)) as { access_token?: string; refresh_token?: string; expires_in?: number; user?: AccountInfo; detail?: string } | null;
+  if (response.ok && data?.access_token) {
+    devRefreshToken = data.refresh_token ?? "";
+    return {
+      state: "ready", baseUrl: current.baseUrl, token: data.access_token, user: data.user ?? null, email: data.user?.email ?? null,
+      expiresAt: new Date(Date.now() + (data.expires_in ?? 900) * 1000).toISOString(), error: null,
+    };
+  }
+  if (response.status === 401 || response.status === 403) devRefreshToken = "";
+  return signedOut(typeof data?.detail === "string" ? data.detail : `Lỗi ${response.status}`);
+}
+
+export const connection = {
+  /** Lấy trạng thái ban đầu (Electron tự khôi phục phiên đã lưu). Gọi nhiều lần vẫn chỉ chạy một lần. */
+  init(): Promise<BackendInfo> {
+    if (!initPromise) initPromise = (async () => publish(window.smc ? await window.smc.getBackend() : current))();
+    return initPromise;
+  },
+  /** Thử kết nối lại (sau lỗi mạng). */
+  retry(): Promise<BackendInfo> {
+    initPromise = null;
+    return connection.init();
+  },
+  async setServer(url: string): Promise<BackendInfo> {
+    if (!window.smc) return current;
+    return publish(await window.smc.setServer(url));
+  },
+  async forgetServer(): Promise<BackendInfo> {
+    if (!window.smc) return current;
+    return publish(await window.smc.forgetServer());
+  },
+  async login(email: string, password: string): Promise<BackendInfo> {
+    const info = window.smc ? await window.smc.login(email, password) : await devAuth("/auth/login", { email, password });
+    return publish(info);
+  },
+  /** Làm mới access token (gộp các lời gọi đồng thời thành một). */
+  refresh(): Promise<BackendInfo> {
+    if (!refreshPromise) {
+      refreshPromise = (async () => {
+        let info: BackendInfo;
+        if (window.smc) info = await window.smc.refreshSession();
+        else if (devRefreshToken) info = await devAuth("/auth/refresh", { refresh_token: devRefreshToken });
+        else info = signedOut("Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.");
+        return publish(info);
+      })().finally(() => {
+        refreshPromise = null;
+      });
+    }
+    return refreshPromise;
+  },
+  async logout(): Promise<BackendInfo> {
+    if (window.smc) return publish(await window.smc.logout());
+    const token = devRefreshToken;
+    devRefreshToken = "";
+    if (token) {
+      await fetch(`${current.baseUrl}/api/auth/logout`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-SMC-Client": DEV_CLIENT }, body: JSON.stringify({ refresh_token: token }),
+      }).catch(() => undefined);
+    }
+    return publish(signedOut());
+  },
+};
 
 export function apiUrl(path: string, params?: Record<string, string | number | boolean | null | undefined>): string {
-  const url = new URL(backend.baseUrl + "/api" + path);
+  const url = new URL(current.baseUrl + "/api" + path);
   for (const [key, value] of Object.entries(params ?? {})) {
     if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
   }
   return url.toString();
 }
 
-/** URL cho thẻ <img>: token đi qua tham số vì thẻ ảnh không gửi được header. */
+/** URL cho thẻ <img>: thẻ ảnh không gửi được header nên access token (ngắn hạn, chỉ GET) đi qua tham số. */
 export function assetUrl(path: string, cacheKey?: string | number): string {
-  return apiUrl(path, { token: backend.token || undefined, v: cacheKey });
+  return apiUrl(path, { access_token: current.token || undefined, v: cacheKey });
 }
 
-async function request<T>(
-  method: string,
-  path: string,
-  options: { params?: Record<string, string | number | boolean | null | undefined>; body?: unknown; form?: FormData; signal?: AbortSignal } = {},
-): Promise<T> {
-  await initBackend();
+type RequestOptions = {
+  params?: Record<string, string | number | boolean | null | undefined>;
+  body?: unknown;
+  form?: FormData;
+  signal?: AbortSignal;
+};
+
+async function send(method: string, path: string, options: RequestOptions, retried = false): Promise<Response> {
+  if (current.state === "ready" && current.expiresAt && Date.parse(current.expiresAt) - Date.now() < REFRESH_MARGIN_MS) {
+    await connection.refresh(); // access token sắp hết hạn → lấy token mới trước khi gọi
+  }
   const headers: Record<string, string> = {};
-  if (backend.token) headers["X-SMC-Token"] = backend.token;
+  if (current.token) headers.Authorization = `Bearer ${current.token}`;
   let body: BodyInit | undefined;
   if (options.form) body = options.form;
   else if (options.body !== undefined) {
@@ -67,25 +175,35 @@ async function request<T>(
     response = await fetch(apiUrl(path, options.params), { method, headers, body, signal: options.signal });
   } catch (error) {
     if ((error as Error).name === "AbortError") throw error;
-    throw new ApiError("Không kết nối được dịch vụ nền của ứng dụng.", 0);
+    throw new ApiError("Không kết nối được máy chủ Mini PC. Kiểm tra Tailscale và kết nối mạng.", 0);
   }
+  if (response.status === 401 && current.token && !retried) {
+    const info = await connection.refresh(); // token hết hạn/bị thu hồi → thử làm mới đúng một lần
+    if (info.state === "ready") return send(method, path, options, true);
+  }
+  return response;
+}
+
+async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await send(method, path, options);
   if (!response.ok) {
     let message = `Lỗi ${response.status}`;
+    let code: string | undefined;
     try {
       const data = await response.json();
       if (typeof data.detail === "string") message = data.detail;
+      if (typeof data.code === "string") code = data.code;
     } catch {
       /* giữ thông báo mặc định */
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, code);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
 async function download(path: string, params?: Record<string, string>): Promise<{ blob: Blob; filename: string }> {
-  await initBackend();
-  const response = await fetch(apiUrl(path, params), { headers: backend.token ? { "X-SMC-Token": backend.token } : {} });
+  const response = await send("GET", path, { params });
   if (!response.ok) throw new ApiError("Không tải được file.", response.status);
   const disposition = response.headers.get("Content-Disposition") ?? "";
   const match = /filename="?([^";]+)"?/.exec(disposition);
@@ -103,6 +221,8 @@ export function saveBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+type Page = { limit?: number; offset?: number };
+
 export const api = {
   health: () => request<Health>("GET", "/health"),
 
@@ -111,12 +231,29 @@ export const api = {
     request<SearchResult>("GET", "/medicines/search", { params: { q, limit, offset }, signal }),
   medicine: (id: number) => request<MedicineDetail>("GET", `/medicines/${id}`),
   catalogStatus: () => request<CatalogStatus>("GET", "/catalog/status"),
+  /** Nhập lại từ file nguồn đã cấu hình TRÊN MÁY CHỦ (đường dẫn trên Mini PC). */
   catalogImport: (path?: string | null, force = false) => request<CatalogStatus>("POST", "/catalog/import", { body: { path: path ?? null, force } }),
+  /** Tải file Excel từ máy Windows lên máy chủ rồi nhập. */
   catalogUpload: (file: File) => {
     const form = new FormData();
     form.append("file", file);
     return request<CatalogStatus>("POST", "/catalog/upload", { form });
   },
+  // Mã vạch → thuốc có sẵn trong danh mục (file Excel/CSV của nhà thuốc)
+  barcodeStatus: () => request<BarcodeStatus>("GET", "/catalog/barcodes/status"),
+  /** dryRun = true: chỉ kiểm tra và báo cáo, máy chủ không ghi gì. */
+  barcodeImport: (file: File, dryRun: boolean) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("dry_run", String(dryRun));
+    return request<BarcodeImportReport>("POST", "/catalog/barcodes/import", { form });
+  },
+  barcodeLookup: (code: string) => request<BarcodeLookup>("GET", "/catalog/barcodes/lookup", { params: { code } }),
+  barcodeDelete: (gtin: string) => request<{ deleted: boolean; gtin: string }>("DELETE", `/catalog/barcodes/${encodeURIComponent(gtin)}`),
+  // AI tra cứu trên mạng (máy chủ gọi Gemini; ứng dụng Windows không giữ khóa AI)
+  aiStatus: () => request<AiStatus>("GET", "/ai/status"),
+  aiScan: (jobId: string) => request<AiLookupResult>("POST", `/ai/scans/${jobId}`),
+  aiLookup: (kind: "barcode" | "qr", code: string) => request<AiLookupResult>("POST", "/ai/lookup", { body: { kind, code } }),
 
   // OCR
   ocrSubmit: (image: Blob, source: "camera" | "upload", crop?: number[] | null) => {
@@ -164,38 +301,61 @@ export const api = {
   historyDelete: (id: number) => request<unknown>("DELETE", `/history/${id}`),
   historyClear: () => request<{ deleted: number; removed_images: number }>("DELETE", "/history"),
 
-  // Thiết bị
+  // Tủ chính (thiết bị ESP32 chính) — tương thích Trang chủ / Cảnh báo
   device: () => request<DeviceStatus>("GET", "/device/status"),
   deviceRefresh: () => request<unknown>("POST", "/device/refresh"),
-  deviceTest: (body: { mode: string; host: string; port: number; path: string; timeout: number; token?: string | null }) =>
-    request<{ ok: boolean; error?: string; temperature?: number | null; humidity?: number | null; simulated?: boolean }>("POST", "/device/test", { body }),
-  deviceReadings: (hours = 24) => request<{ hours: number; items: SensorPoint[] }>("GET", "/device/readings", { params: { hours } }),
+  deviceReadings: (hours = 24, deviceId?: string) => request<{ hours: number; items: SensorPoint[] }>("GET", "/device/readings", { params: { hours, device_id: deviceId } }),
 
-  // Cài đặt, hồ sơ
+  // Thiết bị ESP32 + lệnh qua Internet (chỉ kênh Admin)
+  devices: () => request<DeviceList>("GET", "/devices"),
+  deviceDetail: (id: string) => request<{ device: DeviceInfo; snapshot: DeviceStatus; connection: DeviceConnection }>("GET", `/devices/${id}`),
+  deviceCreate: (body: { name: string; note?: string | null }) => request<DeviceTokenResult>("POST", "/devices", { body }),
+  deviceUpdate: (id: string, body: { name?: string; note?: string | null; is_active?: boolean; is_primary?: boolean }) =>
+    request<{ device: DeviceInfo }>("PATCH", `/devices/${id}`, { body }),
+  deviceRotateToken: (id: string) => request<DeviceTokenResult>("POST", `/devices/${id}/token`),
+  deviceDelete: (id: string) => request<{ deleted: boolean }>("DELETE", `/devices/${id}`),
+  deviceTelemetry: (id: string, hours = 24) => request<{ hours: number; items: SensorPoint[] }>("GET", `/devices/${id}/telemetry`, { params: { hours } }),
+  deviceActions: () => request<{ items: ActionSpec[] }>("GET", "/device/actions"),
+  deviceCommands: (id: string, limit = 30) => request<{ items: DeviceCommand[] }>("GET", `/devices/${id}/commands`, { params: { limit } }),
+  deviceCommandSend: (id: string, action: string, payload: Record<string, unknown>, ttlSeconds?: number) =>
+    request<DeviceCommand>("POST", `/devices/${id}/commands`, { body: { action, payload, ttl_seconds: ttlSeconds ?? null } }),
+  command: (id: string) => request<DeviceCommand>("GET", `/commands/${id}`),
+  commandCancel: (id: string) => request<DeviceCommand>("POST", `/commands/${id}/cancel`),
+
+  // Cài đặt, hồ sơ, tài khoản đang đăng nhập
   settings: () => request<SettingsResponse>("GET", "/settings"),
   settingsUpdate: (body: SettingsPatch) => request<{ settings: AppSettings }>("PATCH", "/settings", { body }),
   profile: () => request<Profile>("GET", "/profile"),
-  profileUpdate: (body: { name?: string; email?: string; role?: string }) => request<Profile>("PATCH", "/profile", { body }),
+  profileUpdate: (body: { name?: string; phone?: string | null }) => request<Profile>("PATCH", "/profile", { body }),
   avatarUpload: (file: File) => {
     const form = new FormData();
     form.append("file", file);
     return request<Profile>("POST", "/profile/avatar", { form });
   },
   avatarDelete: () => request<Profile>("DELETE", "/profile/avatar"),
-  login: (email: string, password: string) => request<Profile>("POST", "/auth/login", { body: { email, password } }),
-  logout: () => request<Profile>("POST", "/auth/logout"),
+  me: () => request<{ user: AccountInfo; channel: string }>("GET", "/auth/me"),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ ok: boolean }>("POST", "/auth/password", { body: { current_password, new_password } }),
 
-  // Sao lưu
-  backups: () => request<{ items: BackupInfo[]; directory: string }>("GET", "/backup"),
+  // Quản lý tài khoản (ADMIN / SCANNER)
+  users: (params: { q?: string; role?: string } & Page = {}) => request<UserList>("GET", "/admin/users", { params }),
+  user: (id: string) => request<{ user: AdminUser; sessions: UserSessionInfo[] }>("GET", `/admin/users/${id}`),
+  userCreate: (body: UserCreateInput) => request<{ user: AdminUser }>("POST", "/admin/users", { body }),
+  userUpdate: (id: string, body: UserPatchInput) => request<{ user: AdminUser }>("PATCH", `/admin/users/${id}`, { body }),
+  userSetPassword: (id: string, new_password: string) => request<{ ok: boolean }>("POST", `/admin/users/${id}/password`, { body: { new_password } }),
+  userRevokeSessions: (id: string) => request<{ ok: boolean }>("POST", `/admin/users/${id}/sessions/revoke`),
+  userDelete: (id: string) => request<{ deleted: boolean }>("DELETE", `/admin/users/${id}`),
+
+  // Nhật ký kiểm toán, lượt quét của mọi tài khoản, trạng thái máy chủ
+  audit: (params: { q?: string; action?: string; success?: boolean } & Page = {}) => request<{ total: number; items: AuditEntry[] }>("GET", "/admin/audit", { params }),
+  adminScans: (params: { q?: string; user_id?: string } & Page = {}) => request<{ total: number; items: AdminScan[] }>("GET", "/admin/scans", { params }),
+  system: () => request<SystemStatus>("GET", "/admin/system"),
+
+  // Sao lưu PostgreSQL (khôi phục chỉ làm trên Mini PC bằng dòng lệnh)
+  backups: () => request<BackupList>("GET", "/backup"),
   backupCreate: () => request<BackupInfo>("POST", "/backup"),
   backupDownload: (name: string) => download(`/backup/${encodeURIComponent(name)}/download`),
   backupDelete: (name: string) => request<unknown>("DELETE", `/backup/${encodeURIComponent(name)}`),
-  backupRestore: (name: string) => request<{ restored: Record<string, number>; safety_backup: string }>("POST", "/backup/restore", { body: { name } }),
-  backupRestoreUpload: (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return request<{ restored: Record<string, number>; safety_backup: string }>("POST", "/backup/restore-upload", { form });
-  },
 
   notificationsPending: () => request<PendingNotifications>("POST", "/notifications/pending"),
 };

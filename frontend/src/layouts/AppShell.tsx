@@ -1,11 +1,24 @@
-import { AnimatePresence, motion } from "motion/react";
-import { Outlet, useLocation } from "react-router-dom";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useRef } from "react";
+import { useLocation, useOutlet } from "react-router-dom";
 import { CatalogSearchModal } from "@/components/CatalogSearchModal";
 import { Sidebar } from "@/components/Sidebar";
 import { ToastViewport } from "@/components/Toast";
 import { Topbar } from "@/components/Topbar";
 import { useNotificationPump, useThemeAndLanguage } from "@/hooks/useAppEffects";
 import { useHealth } from "@/services/queries";
+
+/**
+ * Nội dung một khung trang. Khi khung đang mờ dần để rời đi, giữ nguyên trang CŨ — nếu không, <Outlet> sẽ dựng
+ * trang mới ngay trong khung cũ (hai bản của cùng một trang chạy song song trong 200 ms chuyển cảnh).
+ */
+function PageFrame() {
+  const outlet = useOutlet();
+  const present = useIsPresent();
+  const last = useRef(outlet);
+  if (present) last.current = outlet;
+  return last.current;
+}
 
 /**
  * Khung ứng dụng dùng chung: Sidebar trái + Topbar trên + vùng nội dung cuộn.
@@ -32,7 +45,7 @@ export function AppShell() {
               transition={{ duration: 0.2, ease: "easeOut" }}
               className="mx-auto w-full max-w-[1680px]"
             >
-              <Outlet />
+              <PageFrame />
             </motion.div>
           </AnimatePresence>
         </main>

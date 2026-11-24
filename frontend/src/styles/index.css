@@ -7,47 +7,55 @@
 @custom-variant short (@media (max-height: 860px));
 
 /* ------------------------------------------------------------------ */
-/* Design tokens — Premium Minimalist Smart Home / Modern Medical      */
+/* Design tokens — bảng màu chuẩn của dự án (đánh số theo ảnh thiết kế) */
 /* ------------------------------------------------------------------ */
 :root {
-  --smc-bg: #f7f7f5;
-  --smc-surface: #ffffff;
-  --smc-tile: #f5f7fb;
+  --smc-bg: #f0f7ff; /* (1) nền trang #F0F7FF → #E2EEFF (xem .app-backdrop) */
+  --smc-bg-end: #e2eeff;
+  --smc-surface: #ffffff; /* (2) thanh bên, (9) nút điều hướng dưới, thẻ */
+  --smc-tile: #f0f7ff; /* (6) nút phụ tròn (ảnh, bàn phím) */
+  --smc-metric: #f0f6ff; /* (7) thẻ thông số môi trường */
+  --smc-scan-panel: #e6f2ff; /* (4) vùng camera / quét thuốc */
   --smc-navy: #111b39;
   --smc-muted: #687287;
-  --smc-line: #e8ebf0;
-  --smc-primary: #0878f9;
-  --smc-primary-soft: #e9f2fe;
-  --smc-success: #10a477;
-  --smc-success-soft: #e8f6f0;
+  --smc-line: #e3ebf7;
+  --smc-primary: #0066ff; /* (3) mục menu đang chọn, (5) nút Quét thuốc, liên kết/chữ nhấn */
+  --smc-primary-soft: #e6f2ff;
+  --smc-success: #10b981; /* "Hệ thống sẵn sàng" */
+  --smc-success-soft: #e7f8f1;
   --smc-warning: #f59e0b;
-  --smc-warning-soft: #fef4e2;
+  --smc-warning-soft: #fff3d6; /* (8) nền biểu tượng thẻ Cảnh báo */
+  --smc-warning-label: #ffecb3; /* (8) nền nhãn "Nhấn để xem và xử lý" */
   --smc-warning-ink: #b46a00;
-  --smc-danger: #e5484d;
+  --smc-danger: #ef4444; /* số lượng thông báo */
   --smc-danger-soft: #fdecec;
-  --smc-shadow: 0 1px 2px rgba(17, 27, 57, 0.03), 0 14px 36px rgba(17, 27, 57, 0.045);
-  --smc-glow: rgba(8, 120, 249, 0.07);
+  --smc-shadow: 0 1px 2px rgba(17, 27, 57, 0.03), 0 14px 36px rgba(0, 72, 180, 0.06);
+  --smc-glow: rgba(0, 102, 255, 0.06);
   color-scheme: light;
 }
 
 .dark {
   --smc-bg: #0d1322;
+  --smc-bg-end: #0a1020;
   --smc-surface: #151c2f;
   --smc-tile: #1b243b;
+  --smc-metric: #1a2440;
+  --smc-scan-panel: #16233f;
   --smc-navy: #eef2fb;
   --smc-muted: #97a3bb;
   --smc-line: #27314b;
-  --smc-primary: #3b96ff;
-  --smc-primary-soft: #14294d;
-  --smc-success: #2fc191;
+  --smc-primary: #3d8bff;
+  --smc-primary-soft: #132a52;
+  --smc-success: #34d399;
   --smc-success-soft: #12302a;
   --smc-warning: #f6b23c;
   --smc-warning-soft: #3a2c10;
+  --smc-warning-label: #4a3712;
   --smc-warning-ink: #f6b23c;
-  --smc-danger: #f0666a;
+  --smc-danger: #f87171;
   --smc-danger-soft: #3b1a1d;
   --smc-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.25);
-  --smc-glow: rgba(59, 150, 255, 0.08);
+  --smc-glow: rgba(61, 139, 255, 0.08);
   color-scheme: dark;
 }
 
@@ -58,6 +66,8 @@
   --color-bg: var(--smc-bg);
   --color-surface: var(--smc-surface);
   --color-tile: var(--smc-tile);
+  --color-metric: var(--smc-metric);
+  --color-scan-panel: var(--smc-scan-panel);
   --color-navy: var(--smc-navy);
   --color-muted: var(--smc-muted);
   --color-line: var(--smc-line);
@@ -67,6 +77,7 @@
   --color-success-soft: var(--smc-success-soft);
   --color-warning: var(--smc-warning);
   --color-warning-soft: var(--smc-warning-soft);
+  --color-warning-label: var(--smc-warning-label);
   --color-warning-ink: var(--smc-warning-ink);
   --color-danger: var(--smc-danger);
   --color-danger-soft: var(--smc-danger-soft);
@@ -75,7 +86,7 @@
   --radius-tile: 20px;
   --radius-control: 16px;
   --shadow-card: var(--smc-shadow);
-  --shadow-button: 0 10px 24px rgba(8, 120, 249, 0.28);
+  --shadow-button: 0 10px 24px rgba(0, 102, 255, 0.28);
 
   --breakpoint-3xl: 1760px;
 }
@@ -137,13 +148,15 @@
     border: 3px solid transparent;
     background-clip: content-box;
   }
+  /* (1) Nền trang: chuyển sắc xanh nhạt #F0F7FF → #E2EEFF */
   .app-backdrop {
     background:
       radial-gradient(900px 320px at 62% -8%, var(--smc-glow), transparent 70%),
-      var(--smc-bg);
+      linear-gradient(180deg, var(--smc-bg) 0%, var(--smc-bg-end) 100%);
   }
+  /* (5) Nút chính: #0066FF */
   .btn-gradient {
-    background: linear-gradient(90deg, #2ea3f8 0%, #0878f9 100%);
+    background: var(--smc-primary);
   }
   .skeleton {
     background: linear-gradient(90deg, var(--smc-tile) 25%, var(--smc-line) 37%, var(--smc-tile) 63%);

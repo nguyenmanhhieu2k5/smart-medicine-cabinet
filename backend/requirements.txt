@@ -1,10 +1,10 @@
-# Tủ thuốc thông minh — thư viện Python cho backend (chạy ứng dụng + đóng gói).
-# Đã kiểm thử với Python 3.13 trên Linux. Trên Windows nên dùng Python 3.11–3.13 (64-bit).
+# Tủ thuốc thông minh — thư viện Python cho máy chủ Mini PC (FastAPI + PostgreSQL + PaddleOCR + IoT).
+# Đã kiểm thử trên Windows 10 (Python 3.12) với PostgreSQL 17. Dùng Python 3.11–3.13 (64-bit).
 #
 #   python -m venv .venv
 #   .venv\Scripts\python -m pip install -r requirements.txt
 #
-# --- API cục bộ ---
+# --- API (hai cổng: Public + Admin) ---
 fastapi==0.162.2
 uvicorn==0.54.0
 python-multipart==0.0.33
@@ -12,8 +12,21 @@ pydantic==2.14.3
 httpx==0.28.1
 websockets==17.4
 
-# --- Cơ sở dữ liệu + nhập Excel + so khớp ---
+# --- Cơ sở dữ liệu PostgreSQL + migration ---
 SQLAlchemy==2.1.8
+psycopg[binary]==3.3.7
+alembic==1.20.1
+tzdata==2026.6
+
+# --- Xác thực / phân quyền ---
+argon2-cffi==25.1.0
+PyJWT==2.15.1
+email-validator==2.3.0
+
+# --- Giám sát máy chủ ---
+psutil==7.2.2
+
+# --- Nhập Excel + so khớp ---
 pandas==3.1.1
 openpyxl==3.1.5
 numpy==2.3.5

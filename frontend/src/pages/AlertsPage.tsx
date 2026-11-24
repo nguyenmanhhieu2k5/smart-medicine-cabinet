@@ -96,7 +96,7 @@ function MonitorCard() {
         ))}
       </ul>
       {connected && device?.last_update && <p className="mt-1 text-[12.5px] text-muted">{t("Cập nhật lúc {time} từ cảm biến", { time: formatTime(device.last_update) })}</p>}
-      {!device?.enabled && <p className="mt-1 text-[12.5px] text-muted">{t("Chưa kết nối ESP32 nên không có số đo.")} <Link to="/settings#esp32" className="font-semibold text-primary hover:underline">{t("Thiết lập")}</Link></p>}
+      {!device?.enabled && <p className="mt-1 text-[12.5px] text-muted">{t("Chưa kết nối ESP32 nên không có số đo.")} <Link to="/admin/devices" className="font-semibold text-primary hover:underline">{t("Thiết lập")}</Link></p>}
     </Card>
   );
 }

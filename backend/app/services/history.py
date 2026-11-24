@@ -1,4 +1,4 @@
-"""Ghi lịch sử hoạt động vào SQLite."""
+"""Ghi lịch sử hoạt động (dòng thời gian của ứng dụng quản trị) vào PostgreSQL."""
 from __future__ import annotations
 
 from typing import Any
@@ -14,6 +14,7 @@ GROUP_LABELS = {
     "reminder": "Nhắc uống",
     "alert": "Cảnh báo",
     "system": "Hệ thống",
+    "device": "Thiết bị",
 }
 
 
