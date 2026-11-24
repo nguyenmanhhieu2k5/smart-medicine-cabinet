@@ -1,4 +1,4 @@
-import { ImageIcon, RadioTower, RefreshCw, ScanLine, Server, Sparkles, X } from "lucide-react-native";
+import { Globe, ImageIcon, RadioTower, RefreshCw, ScanLine, Server, X } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { colors, font } from "@/theme";
@@ -42,7 +42,7 @@ export function UnrecognizedView({ title, message, onRescan, onPickOther, onAi }
       <Button title="Quét lại" icon={ScanLine} onPress={onRescan} style={styles.button} />
       <Button title="Chọn ảnh khác" icon={ImageIcon} variant="outline" onPress={onPickOther} style={[styles.button, { marginTop: 12 }]} />
       {onAi ? (
-        <Button title="Tìm trên mạng bằng AI" icon={Sparkles} variant="secondary" onPress={onAi} style={[styles.button, { marginTop: 12 }]} testID="ai-search" />
+        <Button title="Tìm trên mạng" icon={Globe} variant="secondary" onPress={onAi} style={[styles.button, { marginTop: 12 }]} testID="ai-search" />
       ) : null}
     </View>
   );

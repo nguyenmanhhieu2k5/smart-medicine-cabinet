@@ -1,11 +1,11 @@
 /**
- * Tìm thông tin thuốc trên mạng bằng AI (máy chủ gọi Gemini + Google Search; điện thoại không giữ khóa AI).
+ * Tìm thông tin thuốc trên mạng (máy chủ dùng Tavily không AI — mặc định — hoặc Gemini; điện thoại không giữ khóa nào).
  * Mở khi: mã vạch/QR chưa có trong dữ liệu, hoặc người dùng xác nhận "không có thuốc đúng" trong kết quả quét.
- * Chỉ đọc — kết quả AI không tự vào tủ thuốc; thuốc khớp trong danh mục mở ra màn Chi tiết thuốc (dữ liệu chính thức).
+ * Chỉ đọc — kết quả không tự vào tủ thuốc; thuốc khớp trong danh mục mở ra màn Chi tiết thuốc (dữ liệu chính thức).
  */
 import { router, useLocalSearchParams } from "expo-router";
 import {
-  BadgeCheck, Building2, ChevronRight, ClipboardList, ExternalLink, FlaskConical, Globe, Layers, Package, Pill, RotateCcw, ScanLine,
+  BadgeCheck, Building2, ChevronRight, ClipboardList, ExternalLink, FlaskConical, Globe, Info, Layers, Package, Pill, RotateCcw, ScanLine,
   SearchX, ShieldAlert, Sparkles, type LucideIcon,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
@@ -88,12 +88,12 @@ export default function AiLookupScreen() {
       <Screen testID="ai-lookup-screen">
         <ScreenHeader title="Tìm trên mạng" onBack={back} />
         <View style={styles.center} testID="ai-loading">
-          <View style={styles.pulse}><Sparkles size={40} color={colors.primary} strokeWidth={1.8} /></View>
+          <View style={styles.pulse}><Globe size={40} color={colors.primary} strokeWidth={1.8} /></View>
           <Text style={[T.section, { textAlign: "center", marginTop: 18 }]}>Đang tìm thông tin thuốc trên mạng…</Text>
           <Text style={[T.body, { textAlign: "center", marginTop: 6 }]}>{subject(kind, code)}</Text>
           <View style={styles.elapsed}>
             <ActivityIndicator color={colors.primary} />
-            <Text style={[T.small, { fontSize: 14 }]}>{elapsed > 0 ? `${elapsed} giây · ` : ""}thường mất 5–20 giây</Text>
+            <Text style={[T.small, { fontSize: 14 }]}>{elapsed > 0 ? `${elapsed} giây · ` : ""}thường mất vài giây</Text>
           </View>
         </View>
       </Screen>
@@ -174,7 +174,7 @@ export default function AiLookupScreen() {
           <Row icon={Package} label="Quy cách" value={info.quy_cach} />
           <Row icon={ClipboardList} label="Số đăng ký" value={info.so_dang_ky} />
           <Row icon={Building2} label="Nhà sản xuất" value={[info.nha_san_xuat, info.nuoc_san_xuat].filter(Boolean).join(" · ") || null} last={!info.ghi_chu} />
-          <Row icon={Sparkles} label={data.mode === "search" || data.mode === "text" ? "Ghi chú" : "Ghi chú của AI"} value={info.ghi_chu} last />
+          <Row icon={data.mode === "search" || data.mode === "text" ? Info : Sparkles} label={data.mode === "search" || data.mode === "text" ? "Ghi chú" : "Ghi chú của AI"} value={info.ghi_chu} last />
         </Card>
 
         {data.sources.length > 0 ? (

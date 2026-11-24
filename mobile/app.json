@@ -62,7 +62,8 @@
           "cameraPermission": false,
           "microphonePermission": false
         }
-      ]
+      ],
+      "./plugins/withShortNativeObjectPaths"
     ],
     "experiments": {
       "typedRoutes": false

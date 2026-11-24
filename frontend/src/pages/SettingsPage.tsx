@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
-  Barcode, BellRing, Camera, Check, ChevronRight, CircleCheck, Cpu, Database, Download, Droplet, FileSpreadsheet, HardDrive, Languages,
+  Barcode, BellRing, Camera, Check, ChevronRight, CircleCheck, Cpu, Database, Download, Droplet, FileSpreadsheet, Globe, HardDrive, Languages,
   LoaderCircle, MonitorCog, Palette, RefreshCw, ScanBarcode, Search, Server, ShieldCheck, Sparkles, Thermometer, Trash2, TriangleAlert, Unlink, Upload,
   Volume2, Wifi, Zap, type LucideIcon,
 } from "lucide-react";
@@ -347,26 +347,44 @@ function AiSection() {
   const t = useT();
   const status = useAiStatus();
   const data = status.data;
+  const provider = data?.provider ?? "auto";
+  const geminiOn = provider !== "tavily";
+  const tavilyOn = provider !== "gemini";
+  const ready = data && ((tavilyOn && data.web_search?.configured) || (geminiOn && data.configured));
   return (
-    <Section title={t("AI tra cứu thuốc (Gemini)")}
-      hint={t("Khi mã vạch/QR chưa có trong dữ liệu hoặc người dùng xác nhận không có thuốc đúng, máy chủ hỏi Google Gemini (có Google Search). Khóa API chỉ nằm trong server.env trên Mini PC (SMC_GEMINI_API_KEY), không lưu trong ứng dụng.")}
-      action={data && (data.configured
+    <Section title={t("Tra cứu thuốc trên mạng")}
+      hint={t("Khi mã vạch/QR chưa có trong dữ liệu hoặc người dùng xác nhận không có thuốc đúng, máy chủ tìm trên Internet rồi đối chiếu số đăng ký với danh mục. Khóa API chỉ nằm trong server.env trên Mini PC, không lưu trong ứng dụng; đổi nguồn bằng SMC_LOOKUP_PROVIDER.")}
+      action={data && (ready
         ? <StatusIndicator tone="success" icon={CircleCheck} size="sm">{t("Đã cấu hình")}</StatusIndicator>
         : <StatusIndicator tone="warning" icon={TriangleAlert} size="sm">{t("Chưa cấu hình")}</StatusIndicator>)}>
       {!data ? <LoadingState rows={2} /> : (
         <>
-          <Row icon={Sparkles} label={t("Tìm kiếm trên mạng (Google Search)")}
-            hint={data.search_available ? t("Sẵn sàng") : t("Chưa khả dụng: khóa API hết hạn mức tìm kiếm — bật thanh toán cho khóa trong Google AI Studio. Trong lúc đó AI vẫn đọc được ảnh quét và mã QR.")}>
-            <StatusIndicator tone={data.search_available ? "success" : "warning"} size="sm">{data.search_available ? t("Sẵn sàng") : t("Chưa khả dụng")}</StatusIndicator>
+          <Row icon={Globe} label={t("Nguồn tra cứu")}
+            hint={provider === "tavily" ? t("Chỉ tìm kiếm web, không gọi AI — nhanh, không tốn hạn mức Gemini") : provider === "auto" ? t("Hỏi Gemini trước, không được thì tìm kiếm web Tavily") : t("Chỉ hỏi Gemini")}>
+            <span className="text-[13px] font-semibold text-navy">
+              {provider === "tavily" ? t("Tavily · không dùng AI") : provider === "auto" ? t("Gemini → Tavily") : t("Chỉ Gemini")}
+            </span>
           </Row>
-          <Row icon={Search} label={t("Tra mã vạch trên mạng không dùng AI (Tavily)")}
-            hint={data.web_search?.configured ? (data.web_search.last_error ?? t("Dùng khi AI không tra được mạng: tìm trang có đúng mã vạch rồi đối chiếu số đăng ký với danh mục")) : t("Chưa cấu hình: thêm SMC_TAVILY_API_KEY vào server.env (đăng ký miễn phí 1.000 lượt/tháng tại tavily.com)")}>
-            <StatusIndicator tone={data.web_search?.configured ? "success" : "neutral"} size="sm">{data.web_search?.configured ? t("Sẵn sàng") : t("Chưa cấu hình")}</StatusIndicator>
+          <Row icon={Search} label={t("Tìm kiếm web (Tavily)")}
+            hint={data.web_search?.configured ? (data.web_search.last_error ?? t("Tìm trang có đúng mã vạch / tên thuốc trên hộp rồi đối chiếu số đăng ký với danh mục")) : t("Chưa cấu hình: thêm SMC_TAVILY_API_KEY vào server.env (đăng ký miễn phí 1.000 lượt/tháng tại tavily.com)")}>
+            <StatusIndicator tone={data.web_search?.configured ? (tavilyOn ? "success" : "neutral") : "neutral"} size="sm">
+              {!data.web_search?.configured ? t("Chưa cấu hình") : tavilyOn ? t("Sẵn sàng") : t("Đang tắt")}
+            </StatusIndicator>
           </Row>
-          <Row icon={Cpu} label={t("Mô hình (theo thứ tự ưu tiên)")} hint={t("Mô hình đầu quá tải thì tự chuyển sang mô hình sau")}>
-            <span className="max-w-[340px] truncate text-[13px] font-semibold text-navy">{data.models.join(" → ")}</span>
+          <Row icon={Sparkles} label={t("AI Gemini (Google Search)")}
+            hint={!geminiOn ? t("Đang tắt (SMC_LOOKUP_PROVIDER=tavily). Khóa Gemini miễn phí không tra được mạng; bật thanh toán cho khóa rồi đặt SMC_LOOKUP_PROVIDER=auto để dùng lại.")
+              : !data.configured ? t("Chưa cấu hình: thêm SMC_GEMINI_API_KEY vào server.env")
+              : data.search_available ? t("Sẵn sàng") : t("Chưa khả dụng: khóa API hết hạn mức tìm kiếm — bật thanh toán cho khóa trong Google AI Studio.")}>
+            <StatusIndicator tone={!geminiOn || !data.configured ? "neutral" : data.search_available ? "success" : "warning"} size="sm">
+              {!geminiOn ? t("Đang tắt") : !data.configured ? t("Chưa cấu hình") : data.search_available ? t("Sẵn sàng") : t("Chưa khả dụng")}
+            </StatusIndicator>
           </Row>
-          {data.last_error && <p className="pt-2 text-[12.5px] text-warning-ink">{data.last_error}</p>}
+          {geminiOn && (
+            <Row icon={Cpu} label={t("Mô hình Gemini")} hint={t("Nhiều mô hình: mô hình đầu quá tải thì tự chuyển sang mô hình sau")}>
+              <span className="max-w-[340px] truncate text-[13px] font-semibold text-navy">{data.models.join(" → ")}</span>
+            </Row>
+          )}
+          {geminiOn && data.last_error && <p className="pt-2 text-[12.5px] text-warning-ink">{data.last_error}</p>}
         </>
       )}
     </Section>

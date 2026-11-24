@@ -1,11 +1,14 @@
-"""Tra cứu thuốc bằng AI khi dữ liệu nội bộ không có câu trả lời.
+"""Tra cứu thuốc trên mạng khi dữ liệu nội bộ không có câu trả lời.
+
+Nguồn (SMC_LOOKUP_PROVIDER): "tavily" = CHỈ tìm kiếm web + quy tắc, không AI (mặc định); "auto" = Gemini trước rồi
+Tavily; "gemini" = chỉ Gemini.
 
 Ba tình huống:
-- barcode: mã vạch không có trong bảng mã vạch → Gemini + Google Search tìm sản phẩm mang ĐÚNG mã đó
-  (bắt buộc tra mạng: không có mạng thì AI không thể "biết" mã vạch → báo không khả dụng, không đoán).
-- qr: nội dung mã QR (thường là đường link/chuỗi của hãng) → tra mạng; nếu chưa tra được thì AI chỉ đọc nội dung mã.
-- scan: người dùng xác nhận "không có thuốc đúng" trong kết quả OCR → AI đọc ẢNH hộp thuốc + chữ OCR, tra mạng để
-  kiểm chứng; nếu chưa tra được thì chỉ đọc ảnh (ghi rõ chế độ cho người dùng).
+- barcode: mã vạch không có trong bảng mã vạch → tìm trang ghi ĐÚNG mã đó (Tavily) hoặc Gemini + Google Search
+  (bắt buộc tra mạng: không có mạng thì không thể "biết" mã vạch → báo không khả dụng, không đoán).
+- qr: nội dung mã QR. Có số đăng ký → tra thẳng danh mục. Đường link → Tavily đọc trang đó. Chữ khác → tìm trên mạng.
+- scan: người dùng xác nhận "không có thuốc đúng" trong kết quả OCR → tìm trên mạng theo tên in nổi bật trên hộp
+  (Tavily), hoặc Gemini đọc ẢNH + chữ OCR.
 
 Kết quả luôn: chỉ thông tin nhận dạng (không liều dùng/chỉ định), kèm nguồn, được đối chiếu lại với danh mục DAV
 (số đăng ký trước, tên + hàm lượng sau) và lưu đệm (ai_lookups) để lần sau trả lời ngay.
@@ -15,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import re
 import time
 import uuid
 from datetime import timedelta
@@ -29,8 +33,20 @@ from app.models.ai import AiLookup
 from app.models.catalog import CatalogReg
 from app.services.ai.gemini import GeminiClient, GeminiError, parse_json_object
 from app.services.barcode.gs1 import parse_code
-from app.services.barcode.web_lookup import build_info, evidence_pages, match_pages, reg_numbers
+from app.services.barcode.web_lookup import (
+    TextQuery,
+    Vocab,
+    build_info,
+    build_vocab,
+    evidence_pages,
+    match_pages,
+    match_text_pages,
+    reg_numbers,
+    text_pages,
+    text_query,
+)
 from app.services.medicine_matcher.catalog import CatalogRepository, medicine_summary
+from app.services.medicine_matcher.matcher import OcrLine, lines_from_text
 from app.services.medicine_matcher.normalize import split_reg_field
 from app.services.ocr import preprocess
 from app.services.websearch.tavily import SearchError, TavilyClient
@@ -45,18 +61,25 @@ NOTICE = ("Thông tin do AI tổng hợp từ Internet, có thể chưa chính x
 NOTICES = {
     "web": NOTICE,
     "offline": NOTICE,
-    "search": ("Kết quả tìm kiếm trên Internet (không dùng AI): thuốc được xác định qua số đăng ký ghi cạnh mã vạch trên các "
-               "trang nguồn và lấy thông tin từ danh mục Cục Quản lý Dược. Hãy đối chiếu với vỏ hộp và hỏi dược sĩ trước khi dùng."),
+    "search": ("Kết quả tìm kiếm trên Internet (không dùng AI): thuốc được xác định qua số đăng ký ghi trên các trang nguồn "
+               "và lấy thông tin từ danh mục Cục Quản lý Dược. Hãy đối chiếu với vỏ hộp và hỏi dược sĩ trước khi dùng."),
     "text": ("Đọc trực tiếp số đăng ký trong nội dung mã (không dùng AI, không tra mạng) rồi lấy thông tin từ danh mục Cục Quản "
              "lý Dược. Hãy đối chiếu với vỏ hộp."),
 }
-MESSAGES = {
+MESSAGES: dict[tuple[str, ...], str] = {
     ("web", True): "AI đã tìm thấy thông tin trên mạng.",
     ("offline", True): "AI đã đọc thông tin trên ảnh/mã (chưa kiểm chứng được trên mạng).",
-    ("search", True): "Đã tìm thấy mã vạch trên mạng (tra cứu không dùng AI).",
     ("text", True): "Đã đọc được số đăng ký trong nội dung mã.",
-    ("search", False): "Không tìm thấy trang nào trên mạng ghi đúng mã vạch này.",
+    ("barcode", "search", True): "Đã tìm thấy mã vạch trên mạng (tra cứu không dùng AI).",
+    ("barcode", "search", False): "Không tìm thấy trang nào trên mạng ghi đúng mã vạch này.",
+    ("search", True): "Đã tìm thấy thông tin thuốc trên mạng (tra cứu không dùng AI).",
+    ("qr", "search", False): "Không tìm được thuốc khớp danh mục từ nội dung mã QR trên mạng.",
+    ("search", False): ("Không tìm được thuốc khớp danh mục từ kết quả tìm kiếm trên mạng. Hãy chụp rõ mặt hộp có tên "
+                        "thuốc, hoặc tìm thủ công."),
 }
+NO_TEXT = ("Trên ảnh không thấy tên thuốc hay hoạt chất nào có trong danh mục Cục Quản lý Dược nên chưa tìm trên mạng. "
+           "Hãy chụp mặt trước của hộp (có tên thuốc). Thực phẩm chức năng, mỹ phẩm không nằm trong danh mục thuốc.")
+VOCAB_TTL = 6 * 3600.0  # bộ từ của danh mục (tên + hoạt chất) — danh mục hiếm khi đổi
 
 SYSTEM = """Bạn là công cụ tra cứu THÔNG TIN NHẬN DẠNG thuốc lưu hành tại Việt Nam cho ứng dụng tủ thuốc gia đình.
 Quy tắc bắt buộc:
@@ -110,23 +133,49 @@ def match_catalog(s, info: dict[str, Any]) -> list[dict[str, Any]]:  # noqa: ANN
 
 
 class AiMedicineService:
-    def __init__(self, db: Database, settings: Settings, client: GeminiClient | None = None, search: TavilyClient | None = None):
+    def __init__(self, db: Database, settings: Settings, client: GeminiClient | None = None, search: TavilyClient | None = None,
+                 provider: str | None = None):
         self.db = db
         self.client = client or GeminiClient(settings.gemini_api_key, settings.gemini_models, settings.gemini_timeout)
         self.search = search or TavilyClient(settings.tavily_api_key)
+        self.provider = provider or settings.lookup_provider
+        self._vocab: tuple[float, Vocab] | None = None
+
+    def _catalog_vocab(self) -> Vocab:
+        now = time.monotonic()
+        if self._vocab is None or now - self._vocab[0] > VOCAB_TTL:
+            with self.db.session() as s:
+                vocab = build_vocab(s)
+            if not vocab.heads:  # danh mục đang trống/đang nhập → không lưu đệm
+                return vocab
+            self._vocab = (now, vocab)
+        return self._vocab[1]
+
+    @property
+    def gemini_on(self) -> bool:
+        return self.provider in ("auto", "gemini") and self.client.configured
+
+    @property
+    def search_on(self) -> bool:
+        return self.provider in ("auto", "tavily") and self.search.configured
 
     @property
     def configured(self) -> bool:
-        return self.client.configured or self.search.configured
+        return self.gemini_on or self.search_on
 
     def close(self) -> None:
         self.client.close()
         self.search.close()
 
     def status(self) -> dict[str, Any]:
-        return {"configured": self.client.configured, "models": self.client.models, "search_available": self.client.search_available(),
-                "last_error": self.client.last_error,
+        return {"provider": self.provider, "configured": self.client.configured, "models": self.client.models,
+                "search_available": self.client.search_available(), "last_error": self.client.last_error,
                 "web_search": {"provider": "tavily", "configured": self.search.configured, "last_error": self.search.last_error}}
+
+    def _no_source(self, kind: str) -> dict[str, Any]:
+        need = {"tavily": "khóa Tavily (SMC_TAVILY_API_KEY)", "gemini": "khóa Gemini (SMC_GEMINI_API_KEY)"}.get(
+            self.provider, "khóa Tavily hoặc Gemini")
+        return self._unavailable(kind, "not_configured", f"Chưa cấu hình tra cứu trên mạng: thiếu {need} trong server.env trên máy chủ.")
 
     # ------------------------------------------------------------------ #
     def _cached(self, key: str) -> AiLookup | None:
@@ -149,7 +198,8 @@ class AiMedicineService:
                        for i in row.catalog_ids or [] if i in rows]
         result = {k: v for k, v in (row.result or {}).items() if not k.startswith("_")} or None
         found = row.status == "found"
-        message = MESSAGES.get((row.mode, found), "AI không tìm thấy thông tin đáng tin cậy về thuốc này.")
+        message = (MESSAGES.get((kind, row.mode, found)) or MESSAGES.get((row.mode, found))
+                   or "AI không tìm thấy thông tin đáng tin cậy về thuốc này.")
         return {
             "status": row.status, "kind": kind, "mode": row.mode, "model": row.model, "cached": cached, "elapsed_ms": row.elapsed_ms,
             "result": result, "sources": row.sources or [], "catalog_matches": matches, "message": message, "reason": None,
@@ -202,6 +252,41 @@ class AiMedicineService:
         row = self._save(kind="qr", key=key, found=True, mode="text", model="rules", info=info, by="registration", sources=[],
                          ids=ids, user_id=user_id, started=started)
         return self._response("qr", row, cached=False)
+
+    def _search_text(self, kind: str, key: str, *, lines: list[OcrLine] | None = None, url: str | None = None,
+                     user_id: uuid.UUID | None = None) -> dict[str, Any]:
+        """Tavily + quy tắc (không AI) theo CHỮ trên hộp/trong mã QR, hoặc đọc trang mà mã QR trỏ tới."""
+        started = time.perf_counter()
+        q = text_query(lines, self._catalog_vocab()) if lines and url is None else None
+        if url is None and q is None:
+            return self._unavailable(kind, "no_text", NO_TEXT)
+        try:
+            if url is not None:
+                page = self.search.extract(url)
+                pages = [{"title": page.title or url, "url": page.url, "text": page.raw_content, "pos": None}] if page else []
+                q = TextQuery(name=pages[0]["title"] if pages else url, strength=None, terms=[])
+                lead, near = "Đã đọc trang web trong mã QR", "ghi trên trang"
+                caveat = name_hint = None
+            else:
+                assert q is not None
+                pages = text_pages(self.search.search(q.query, max_results=8), q)
+                near = "ghi gần tên thuốc"
+                lead = (f"Không đọc được tên thương mại trên hộp nên tìm theo hoạt chất “{q.name}”, {len(pages)} trang nhắc tới"
+                        if q.generic else f"Tên “{q.name}” xuất hiện trên {len(pages)} trang")
+                caveat = ("Có thể là thuốc khác cùng hoạt chất — hãy đối chiếu tên và nhà sản xuất trên vỏ hộp."
+                          if q.generic else None)
+                name_hint = " ".join(filter(None, [q.name, q.strength]))
+        except SearchError as exc:
+            return self._unavailable(kind, exc.reason, str(exc))
+        with self.db.session() as s:
+            match = match_text_pages(s, pages, q) if pages else {"ids": [], "by": None, "reg": None, "votes": 0}
+            info = (build_info(s, pages, match, lead=lead, near=near, name_hint=name_hint, caveat=caveat)
+                    if match["ids"] else None)
+        row = self._save(kind=kind, key=key, found=bool(info), mode="search", model="tavily", info=info, by=match["by"],
+                         sources=[{"title": p["title"][:200], "url": p["url"]} for p in pages[:6]], ids=match["ids"],
+                         user_id=user_id, started=started)
+        log.info("Tra %s trên mạng (Tavily) → %s, %d trang, %s", kind, row.status, len(pages), match["by"])
+        return self._response(kind, row, cached=False)
 
     @staticmethod
     def _unavailable(kind: str, reason: str, message: str) -> dict[str, Any]:
@@ -257,38 +342,63 @@ class AiMedicineService:
             if cached is not None:
                 return self._response(kind, cached, cached=True)
             ai: dict[str, Any] | None = None
-            # 1) AI + Google Search (khi khóa Gemini còn hạn mức tìm kiếm). Mã vạch bắt buộc tra mạng → không có chế độ đoán.
-            if self.client.configured and self.client.search_available():
+            # 1) AI + Google Search (khi bật Gemini và khóa còn hạn mức tìm kiếm). Mã vạch bắt buộc tra mạng → không đoán.
+            if self.gemini_on and self.client.search_available():
                 prompt = (f"Mã vạch (GTIN/EAN) in trên hộp thuốc: {shown}. Dùng Google Search tìm sản phẩm thuốc mang ĐÚNG mã vạch "
                           f"này (tìm cả chuỗi \"{shown}\"; ưu tiên trang nhà thuốc, nhà sản xuất, cơ sở dữ liệu thuốc Việt Nam). "
                           "Chỉ trả found=true khi nguồn ghi đúng mã vạch này cho sản phẩm đó.")
                 ai = self._ask(kind, key, [{"text": prompt}], None, user_id)
                 if ai["status"] == "found":
                     return ai
-            # 2) Không có AI / AI không tìm được → tìm kiếm web (Tavily) + quy tắc, không dùng AI.
-            if self.search.configured:
+            # 2) Tìm kiếm web (Tavily) + quy tắc, không dùng AI.
+            if self.search_on:
                 return self._search_barcode(key, shown, user_id)
             if ai is not None:
                 return ai
-            if self.client.configured:  # có khóa Gemini nhưng đang hết hạn mức tìm kiếm
+            if self.gemini_on:  # chỉ dùng Gemini nhưng khóa đang hết hạn mức tìm kiếm
                 return self._unavailable(kind, "search_quota", self.client.last_error or
                                          "Gemini chưa cho phép tìm kiếm trên mạng (hết hạn mức Google Search của khóa API).")
-            return self._unavailable(kind, "not_configured", "Chưa cấu hình tra cứu trên mạng (thiếu khóa Tavily hoặc Gemini trong server.env).")
+            return self._no_source(kind)
         content = code[:1000]
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:48]
-        cached = self._cached(f"qr:{digest}")
+        key = f"qr:{hashlib.sha256(content.encode('utf-8')).hexdigest()[:48]}"
+        cached = self._cached(key)
         if cached is not None:
             return self._response("qr", cached, cached=True)
-        local = self._qr_text(f"qr:{digest}", content, user_id)  # có số đăng ký trong mã → không cần AI
+        local = self._qr_text(key, content, user_id)  # có số đăng ký trong mã → không cần AI hay mạng
         if local is not None:
             return local
-        web = (f"Nội dung mã QR in trên hộp/vỉ thuốc: \"{content}\". Xác định thuốc liên quan; nếu là đường link hoặc mã "
-               "của hãng, dùng Google Search để tìm thông tin sản phẩm.")
-        offline = (f"Nội dung mã QR in trên hộp/vỉ thuốc: \"{content}\". Chỉ dựa vào nội dung này (không tra mạng) để "
-                   "nhận ra thuốc; không đủ thông tin thì found=false.")
-        return self._ask("qr", f"qr:{digest}", [{"text": web}], [{"text": offline}], user_id)
+        if self.gemini_on:
+            web = (f"Nội dung mã QR in trên hộp/vỉ thuốc: \"{content}\". Xác định thuốc liên quan; nếu là đường link hoặc mã "
+                   "của hãng, dùng Google Search để tìm thông tin sản phẩm.")
+            offline = (f"Nội dung mã QR in trên hộp/vỉ thuốc: \"{content}\". Chỉ dựa vào nội dung này (không tra mạng) để "
+                       "nhận ra thuốc; không đủ thông tin thì found=false.")
+            ai = self._ask("qr", key, [{"text": web}], [{"text": offline}], user_id)
+            if ai["status"] == "found" or not self.search_on:
+                return ai
+        if self.search_on:
+            if re.match(r"https?://\S+$", content.strip(), re.IGNORECASE):
+                return self._search_text("qr", key, url=content.strip(), user_id=user_id)
+            return self._search_text("qr", key, lines=lines_from_text(content), user_id=user_id)
+        return self._no_source("qr")
 
-    def lookup_scan(self, job_id: str, *, image: bytes | None, ocr_text: str, user_id: uuid.UUID | None = None) -> dict[str, Any]:
+    def lookup_scan(self, job_id: str, *, image: bytes | None, ocr_text: str, lines: list[dict[str, Any]] | None = None,
+                    user_id: uuid.UUID | None = None) -> dict[str, Any]:
+        key = f"scan:{job_id}"
+        cached = self._cached(key)
+        if cached is not None:
+            return self._response("scan", cached, cached=True)
+        if self.gemini_on:
+            ai = self._ask_scan(key, image, ocr_text, user_id)
+            if ai["status"] == "found" or not self.search_on:
+                return ai
+        if self.search_on:
+            ocr_lines = [OcrLine(text=str(ln.get("text") or ""), score=ln.get("score"),
+                                 box=tuple(ln["box"]) if isinstance(ln.get("box"), list | tuple) and len(ln["box"]) == 4 else None)
+                         for ln in lines or [] if isinstance(ln, dict)] or lines_from_text(ocr_text)
+            return self._search_text("scan", key, lines=ocr_lines, user_id=user_id)
+        return self._no_source("scan")
+
+    def _ask_scan(self, key: str, image: bytes | None, ocr_text: str, user_id: uuid.UUID | None) -> dict[str, Any]:
         text = (ocr_text or "").strip()[:1500] or "(không đọc được chữ)"
         parts_image: list[dict[str, Any]] = []
         if image:
@@ -302,4 +412,4 @@ class AiMedicineService:
                "(ưu tiên số đăng ký và nhà sản xuất in trên bao bì).")
         offline = (f"Ảnh chụp hộp/vỉ thuốc kèm chữ đọc được bằng OCR:\n{text}\n\nChỉ dựa vào chữ và hình trên ảnh (không tra "
                    "mạng) để xác định thuốc; chữ không rõ thì found=false.")
-        return self._ask("scan", f"scan:{job_id}", [*parts_image, {"text": web}], [*parts_image, {"text": offline}], user_id)
+        return self._ask("scan", key, [*parts_image, {"text": web}], [*parts_image, {"text": offline}], user_id)

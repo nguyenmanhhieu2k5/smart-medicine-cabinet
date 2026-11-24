@@ -54,17 +54,20 @@ describe("Kết quả nhận diện", () => {
   });
 });
 
-describe("Không có thuốc đúng → tìm trên mạng bằng AI", () => {
+describe("Không có thuốc đúng → tìm trên mạng (máy chủ mặc định dùng Tavily, không AI)", () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it("có ứng viên nhưng người dùng xác nhận không có thuốc đúng → mở AI theo đúng lượt quét", async () => {
+  it("có ứng viên nhưng người dùng xác nhận không có thuốc đúng → tìm trên mạng theo đúng lượt quét", async () => {
     await render(<ResultView job={job("uncertain", [candidate(1, "Augmentin 625mg", "medium")])} historyId={null} />);
+    expect(screen.getByText("Tìm tên thuốc trên hộp vừa chụp trên mạng")).toBeTruthy();
+    expect(screen.queryByText(/bằng AI/)).toBeNull();
     await fireEvent.press(screen.getByTestId("ai-not-listed"));
     expect(router.push).toHaveBeenCalledWith({ pathname: "/ai-lookup", params: { kind: "scan", jobId: "0b8f2f7e-1f0c-4f0e-9a51-2a4b8c6d7e8f" } });
   });
 
-  it("không nhận diện được → có nút tìm bằng AI", async () => {
+  it("không nhận diện được → có nút “Tìm trên mạng”", async () => {
     await render(<ResultView job={job("no_text", [])} />);
+    expect(screen.getByText("Tìm trên mạng")).toBeTruthy();
     await fireEvent.press(screen.getByTestId("ai-search"));
     expect(router.push).toHaveBeenCalledWith({ pathname: "/ai-lookup", params: { kind: "scan", jobId: "0b8f2f7e-1f0c-4f0e-9a51-2a4b8c6d7e8f" } });
   });

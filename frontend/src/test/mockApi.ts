@@ -55,12 +55,13 @@ export interface MockState {
   barcodes: number;
   /** Trạng thái AI giả lập: tìm kiếm trên mạng có dùng được không. */
   aiSearch: boolean;
+  aiProvider: "tavily" | "auto" | "gemini";
   calls: { method: string; path: string; body: unknown }[];
 }
 
 /** Thay `fetch` bằng backend giả tối thiểu; trả về state để từng test chỉnh dữ liệu. */
 export function installMockApi(): MockState {
-  const state: MockState = { alerts: [], cabinet: [], job: null, devices: [], commandStatuses: ["sent", "acknowledged", "applied"], users: [ADMIN_USER], audit: [], barcodes: 0, aiSearch: true, calls: [] };
+  const state: MockState = { alerts: [], cabinet: [], job: null, devices: [], commandStatuses: ["sent", "acknowledged", "applied"], users: [ADMIN_USER], audit: [], barcodes: 0, aiSearch: true, aiProvider: "tavily", calls: [] };
   let commandPolls = 0;
   const command = (status: DeviceCommand["status"]): DeviceCommand => ({
     id: "cmd-1", device_id: "dev-1", action: "buzzer", action_label: "Bật/tắt còi", payload: { on: true, duration_s: 5 }, status,
@@ -94,9 +95,10 @@ export function installMockApi(): MockState {
     if (path === "/alerts/count") return json({ unhandled });
     if (path === "/alerts") return json({ items: state.alerts, unhandled, open: state.alerts.filter((a) => a.status !== "resolved").length, by_category: { environment: 0, medicine: state.alerts.length, system: 0 } });
     if (path === "/catalog/status") return json({ count: 55005, source_path: "DAV_unique.xlsx", default_source: null, last_import: null, progress: { running: false, stage: "idle", rows_read: 0, rows_total: null, percent: null, message: "", file: null, last_result: null } });
-    if (path === "/ai/status") return json({ configured: true, models: ["gemini-3.8-flash", "gemini-flash-lite-latest"], search_available: state.aiSearch, last_error: state.aiSearch ? null : "Gemini chưa cho phép tìm kiếm trên mạng", web_search: { provider: "tavily", configured: true, last_error: null } });
+    if (path === "/ai/status") return json({ provider: state.aiProvider, configured: true, models: ["gemini-3.5-flash"], search_available: state.aiSearch, last_error: state.aiSearch ? null : "Gemini chưa cho phép tìm kiếm trên mạng", web_search: { provider: "tavily", configured: true, last_error: null } });
     if (path.startsWith("/ai/scans/")) return json({
-      status: "found", kind: "scan", mode: state.aiSearch ? "web" : "offline", model: "gemini-3.8-flash", cached: false, elapsed_ms: 4200,
+      status: "found", kind: "scan", mode: state.aiProvider === "tavily" ? "search" : state.aiSearch ? "web" : "offline",
+      model: state.aiProvider === "tavily" ? "tavily" : "gemini-3.5-flash", cached: false, elapsed_ms: 4200,
       result: { found: true, ten_thuoc: "Augmentin 625mg", hoat_chat: "Amoxicillin; Acid clavulanic", ham_luong: "500mg/125mg", dang_bao_che: "Viên nén bao phim", quy_cach: "Hộp 2 vỉ x 7 viên", so_dang_ky: "VN-20169-16", nha_san_xuat: "GSK", nuoc_san_xuat: "Anh", do_tin_cay: "cao", ghi_chu: null },
       sources: [{ title: "nhathuoc.example", url: "https://example.com/augmentin" }],
       catalog_matches: [{ id: 34382, ten_thuoc: "Augmentin 625mg tablets", hoat_chat_chinh: null, ham_luong: "500mg/125mg", ham_luong_source: "hamLuong", dang_bao_che: null, so_dang_ky: "VN-20169-16", ten_cong_ty_san_xuat: null, nuoc_san_xuat: null, dong_goi: null, registration_status: { code: "valid", label: "Số đăng ký còn hiệu lực" }, in_source: true, match_by: "registration" }],

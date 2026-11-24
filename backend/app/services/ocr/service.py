@@ -352,8 +352,9 @@ class OcrService:
                 "result": result.payload if result else None, "error": rec.error,
             }
 
-    def ai_material(self, job_id: str, *, user_id: uuid.UUID | None = None) -> tuple[bytes | None, str] | None:
-        """Ảnh (gốc nếu còn, không thì ảnh thu nhỏ) + chữ OCR của một lượt quét — để AI tra cứu khi danh mục không có."""
+    def ai_material(self, job_id: str, *, user_id: uuid.UUID | None = None) -> tuple[bytes | None, str, list[dict]] | None:
+        """Ảnh (gốc nếu còn, không thì ảnh thu nhỏ) + chữ OCR + các dòng OCR (kèm khung chữ) của một lượt quét —
+        để tra cứu trên mạng khi danh mục không có."""
         try:
             jid = uuid.UUID(job_id)
         except ValueError:
@@ -364,12 +365,13 @@ class OcrService:
                 return None
             result = s.get(OcrResultRecord, jid)
             text = (result.raw_text if result else "") or ""
+            lines = [ln for ln in (result.lines if result else None) or [] if isinstance(ln, dict)]
             image = None
             for candidate in (rec.image_path, rec.thumb_path):
                 if candidate and Path(candidate).is_file():
                     image = Path(candidate).read_bytes()
                     break
-            return image, text
+            return image, text, lines
 
     def thumbnail(self, job_id: str, *, user_id: uuid.UUID | None = None) -> Path | None:
         try:

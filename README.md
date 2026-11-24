@@ -87,16 +87,25 @@ trên Mini PC). `npm run check:resources` chặn việc vô tình đóng gói ba
    mâu thuẫn bị giới hạn điểm (*Augmentin 250 mg/31,25 mg*, *500 mg/125 mg*, *875 mg/125 mg* là ba sản phẩm khác nhau).
 6. **Tối đa 3 ứng viên** với “Mức độ phù hợp” (Cao / Trung bình / Thấp).
 
-**AI tìm trên mạng (Google Gemini + Google Search)** — dùng khi dữ liệu nội bộ không có câu trả lời: mã vạch/QR chưa có
-trong dữ liệu (tự động), hoặc người dùng xác nhận *“không có thuốc đúng”* trong kết quả quét (đọc ảnh + chữ OCR). Máy chủ
-thử lần lượt `gemini-3.8-flash → 3.5-flash → flash-latest → flash-lite` (quá tải thì tự chuyển, tối đa ~24 giây), chỉ trả
-thông tin **nhận dạng** (không liều dùng/chỉ định), kèm nguồn và độ tin cậy, đối chiếu lại với danh mục 55.005 thuốc, lưu
-đệm (`ai_lookups`). Mã vạch **bắt buộc tra mạng** — không có Google Search thì báo rõ, không để AI đoán. Khóa API chỉ nằm
-trong `server.env` trên Mini PC (`SMC_GEMINI_API_KEY`), không có trong ứng dụng Windows/điện thoại, không ghi nhật ký.
+**Tìm trên mạng khi dữ liệu nội bộ không có câu trả lời** — mã vạch/QR chưa có trong dữ liệu (tự động), hoặc người dùng
+xác nhận *“không có thuốc đúng”* trong kết quả quét. Nguồn chọn bằng `SMC_LOOKUP_PROVIDER` trong `server.env`:
 
-**Tra mã vạch trên mạng không dùng AI** (Tavily Search, `SMC_TAVILY_API_KEY`): khi Gemini không tra được mạng, máy chủ tìm
-các trang có đúng dãy số mã vạch → số đăng ký ghi cạnh mã → thuốc trong danh mục 55.005 thuốc (thông tin lấy từ danh mục,
-không lấy từ trang web). Mã QR có ghi số đăng ký được đọc thẳng, không cần mạng hay AI.
+- `tavily` (**mặc định, đang dùng**) — tìm kiếm web Tavily + quy tắc, **không dùng AI**:
+  - *Mã vạch*: chỉ tin trang có đúng dãy số mã vạch → số đăng ký ghi cạnh mã → thuốc trong danh mục 55.005 thuốc.
+  - *Ảnh quét*: chỉ dùng chữ **có trong danh mục** để tìm (chữ OCR vô nghĩa như “CARTON RECYCLE” bị bỏ): tên thương mại
+    (từ đầu tên thuốc trong danh mục, ưu tiên dòng ngắn, chữ to) + hàm lượng; chụp mặt sau không có tên thương mại → tìm theo
+    **hoạt chất** (tối đa “trung bình”, ghi rõ có thể là thuốc khác cùng hoạt chất); không có chữ nào trong danh mục (thực
+    phẩm chức năng, ảnh không phải thuốc) → báo ngay, không tốn lượt. Trang phải nhắc đúng tên → số đăng ký gần tên → danh
+    mục; thuốc tìm được phải đúng tên thương mại trên hộp (trùng hoạt chất thôi là chưa đủ).
+  - *Mã QR*: có số đăng ký → đọc thẳng (không cần mạng); là đường link → Tavily đọc trang đó; chữ khác → tìm như ảnh quét.
+  - Thông tin hiển thị lấy từ **danh mục chính thức**, không lấy từ trang web; luôn kèm nguồn và độ tin cậy.
+- `auto` — hỏi Gemini (`SMC_GEMINI_MODELS`, mặc định `gemini-3.5-flash`, có Google Search) trước, không được thì Tavily.
+  Khóa Gemini **miễn phí** không dùng được Google Search (HTTP 429) và đọc ảnh mất 15–40 giây → cần bật thanh toán.
+- `gemini` — chỉ Gemini.
+
+Kết quả chỉ là thông tin **nhận dạng** (không liều dùng/chỉ định), đối chiếu lại với danh mục, lưu đệm (`ai_lookups`).
+Mã vạch **bắt buộc tra mạng** — không tra được thì báo rõ, không đoán. Khóa API (`SMC_TAVILY_API_KEY`, `SMC_GEMINI_API_KEY`)
+chỉ nằm trong `server.env` trên Mini PC, không có trong ứng dụng Windows/điện thoại, không ghi nhật ký.
 
 **Bảng màu chung** (ứng dụng Windows và điện thoại): nền #F0F7FF→#E2EEFF, thanh bên/thẻ #FFFFFF, mục chọn/nút chính/liên
 kết #0066FF, vùng camera #E6F2FF, nút phụ #F0F7FF, thẻ thông số #F0F6FF, cảnh báo #FFF3D6/#FFECB3, thành công #10B981,

@@ -71,7 +71,7 @@ BUSY = {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"
 def gemini(ctx):
     fake = FakeGemini()
     client = GeminiClient(KEY, ["m-fast", "m-lite"], timeout=5, transport=httpx.MockTransport(fake.handler))
-    ctx.ai = AiMedicineService(ctx.db, ctx.settings, client=client)
+    ctx.ai = AiMedicineService(ctx.db, ctx.settings, client=client, provider="auto")
     return fake
 
 
@@ -130,7 +130,7 @@ def test_qr_falls_back_to_reading_content_offline(ctx, gemini):
 
 def test_invalid_barcode_and_not_configured(ctx, gemini):
     assert ctx.ai.lookup_code("barcode", "123")["reason"] == "invalid"
-    ctx.ai = AiMedicineService(ctx.db, ctx.settings, client=GeminiClient(None, ["m-fast"]))
+    ctx.ai = AiMedicineService(ctx.db, ctx.settings, client=GeminiClient(None, ["m-fast"]), provider="auto")
     r = ctx.ai.lookup_code("barcode", C1)
     assert r["status"] == "not_configured" and not gemini.calls
 

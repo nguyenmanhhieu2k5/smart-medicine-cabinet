@@ -51,13 +51,14 @@ Nhận EAN-13/8, UPC, ITF-14, DataMatrix, QR (GS1 Digital Link), Code 128. Camer
 lại sau 10 giây; QR quảng cáo và mã nội bộ của cửa hàng bị bỏ qua. Điện thoại **chỉ tra cứu** — dữ liệu mã vạch do quản trị
 viên nhập trên ứng dụng Windows (`src/scan/barcode.ts`).
 
-## Tìm trên mạng bằng AI
+## Tìm trên mạng
 
 Màn `app/(app)/ai-lookup.tsx`: mã vạch hợp lệ nhưng chưa có trong dữ liệu, hoặc mã QR không theo chuẩn GS1 → **tự mở**; ở
-màn Kết quả, mục *“Không có thuốc đúng? Tìm trên mạng bằng AI”* (cả khi không nhận diện được) → AI đọc ảnh vừa quét. Máy chủ
-gọi Gemini (`POST /api/v1/ai/lookup`, `/api/v1/ai/scans/<id>`) — **điện thoại không giữ khóa AI**. Màn hiện: thời gian chờ,
-thông tin nhận dạng, độ tin cậy, chế độ (*đã tra trên mạng* / *chỉ đọc ảnh/mã*), thuốc khớp trong danh mục (mở Chi tiết thuốc),
-nguồn tham khảo, lưu ý an toàn. Không tự thêm gì vào tủ thuốc.
+màn Kết quả, mục *“Không có thuốc đúng? Tìm tên thuốc trên hộp vừa chụp trên mạng”* (cả khi không nhận diện được) → máy chủ
+tìm trên mạng (`POST /api/v1/ai/lookup`, `/api/v1/ai/scans/<id>`). Máy chủ mặc định dùng **Tavily, không AI**
+(`SMC_LOOKUP_PROVIDER=tavily`); có thể bật Gemini — **điện thoại không giữ khóa nào**. Màn hiện: thời gian chờ, thông tin
+nhận dạng, độ tin cậy, chế độ (*Tra trên mạng · không dùng AI* / *AI · đã tra trên mạng* / *AI · chỉ đọc ảnh/mã*), thuốc khớp
+trong danh mục (mở Chi tiết thuốc), nguồn tham khảo, lưu ý an toàn. Không tự thêm gì vào tủ thuốc.
 
 ## Giọng đọc tiếng Việt
 
@@ -75,7 +76,37 @@ Máy chưa có giọng tiếng Việt thì ứng dụng **không** đọc bằng
 
 ## Tạo file cài đặt Android (APK)
 
-Máy phát triển hiện không có Android SDK, nên APK được build trên dịch vụ EAS của Expo (cần tài khoản Expo miễn phí):
+### Build ngay trên máy Windows (Android Studio đã cài)
+
+APK chứa 3 kiến trúc: `arm64-v8a` + `armeabi-v7a` (điện thoại thật) và `x86_64` (máy ảo Android Studio trên PC).
+
+**Phải build ở thư mục có đường dẫn NGẮN** (ví dụ `C:\smcb\m`). Windows giới hạn đường dẫn 260 ký tự (`MAX_PATH`);
+build ngay trong `C:\Users\…\Downloads\smart-medicine-cabinet-v1.0.0-source\…\mobile` sẽ hỏng ở bước C++
+(`ninja: manifest 'build.ninja' still dirty after 100 tries` hoặc `ninja: error: mkdir(…)`).
+Plugin `plugins/withShortNativeObjectPaths.js` (khai báo trong `app.json`) lo phần đường dẫn file object của CMake;
+gốc thư mục ngắn lo phần còn lại.
+
+```powershell
+# 1) Chép dự án sang đường dẫn ngắn (bỏ qua file build cũ, ảnh thiết kế).
+#    /XD phải dùng ĐƯỜNG DẪN ĐẦY ĐỦ: ghi trơn "android" sẽ loại cả node_modules\*\android → hỏng build.
+robocopy . C:\smcb\m /E /MT:16 /NFL /NDL /XD "$PWD\android" "$PWD\.expo" "$PWD\dist-web" "$PWD\visual-check" "$PWD\01-auth" "$PWD\02-main-screens" "$PWD\03-overviews" .cxx
+cd C:\smcb\m
+npx expo prebuild -p android --no-install
+
+# 2) Build (lần đầu tự tải NDK + CMake ~1 GB; JDK lấy từ Android Studio)
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+cd android
+.\gradlew.bat assembleRelease "-PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64"
+# → android\app\build\outputs\apk\release\app-release.apk
+
+# 3) Cài lên máy ảo/điện thoại đang cắm
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r app\build\outputs\apk\release\app-release.apk
+```
+
+APK này ký bằng khóa debug của mẫu Expo — đủ để cài thử/nội bộ, **không** dùng để đưa lên Google Play.
+
+### Hoặc build trên dịch vụ EAS của Expo (cần tài khoản Expo miễn phí)
 
 ```
 npm install -g eas-cli
@@ -83,8 +114,6 @@ eas login
 # APK tự dùng địa chỉ máy chủ trong app.json (SMC_API_URL trong eas.json để trống = dùng mặc định đó)
 eas build -p android --profile preview      # → liên kết tải file .apk
 ```
-
-Hoặc build trên máy có Android Studio + JDK 17: `npx expo prebuild -p android && cd android && gradlew assembleRelease`.
 
 ## Kiểm tra
 

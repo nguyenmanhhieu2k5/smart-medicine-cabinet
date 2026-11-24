@@ -719,6 +719,9 @@ export interface AiLookupResult {
 }
 
 export interface AiStatus {
+  /** Nguồn tra cứu trên mạng (SMC_LOOKUP_PROVIDER): chỉ Tavily (không AI) | Gemini trước rồi Tavily | chỉ Gemini. */
+  provider?: "tavily" | "auto" | "gemini";
+  /** Đã có khóa Gemini trong server.env (kể cả khi đang không dùng). */
   configured: boolean;
   models: string[];
   search_available: boolean;

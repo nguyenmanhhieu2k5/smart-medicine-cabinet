@@ -189,18 +189,20 @@ describe("Mã vạch thuốc (Cài đặt)", () => {
   });
 });
 
-describe("AI tra cứu trên mạng (Gemini)", () => {
-  it("chỉ chạy khi người dùng bấm “Tìm bằng AI”; kết quả có độ tin cậy, nguồn, lưu ý và thuốc khớp danh mục", async () => {
+describe("Tra cứu trên mạng khi không có thuốc đúng", () => {
+  it("chỉ chạy khi người dùng bấm “Tìm trên mạng”; mặc định Tavily, ghi rõ không dùng AI, có nguồn, lưu ý và thuốc khớp danh mục", async () => {
     api.job = job("uncertain", [candidate(1, "Augmentin 250mg/31,25mg", "250mg/31,25mg", 77.5)]);
     const user = userEvent.setup();
     renderApp("/scan/result/job1");
     const panel = await screen.findByTestId("ai-panel");
-    expect(api.calls.some((call) => call.path.startsWith("/ai/"))).toBe(false); // không tự gọi AI
-    await user.click(within(panel).getByRole("button", { name: "Tìm bằng AI" }));
+    expect(panel).not.toHaveTextContent("Gemini");
+    expect(api.calls.some((call) => call.path.startsWith("/ai/"))).toBe(false); // không tự tra
+    await user.click(within(panel).getByRole("button", { name: "Tìm trên mạng" }));
     const result = await within(panel).findByTestId("ai-result");
     expect(api.calls).toContainEqual({ method: "POST", path: "/ai/scans/job1", body: null });
     expect(result).toHaveTextContent("Augmentin 625mg");
-    expect(result).toHaveTextContent("AI · đã tra trên mạng");
+    expect(result).toHaveTextContent("Tra trên mạng · không dùng AI");
+    expect(result).not.toHaveTextContent("AI · đã tra trên mạng");
     expect(result).toHaveTextContent("Độ tin cậy: Cao");
     expect(result).toHaveTextContent("Khớp số đăng ký");
     expect(within(result).getByRole("link", { name: /nhathuoc\.example/ })).toHaveAttribute("href", "https://example.com/augmentin");
@@ -208,12 +210,33 @@ describe("AI tra cứu trên mạng (Gemini)", () => {
     expect(api.calls.some((call) => call.method === "POST" && call.path === "/cabinet/medicines")).toBe(false); // không tự vào tủ
   });
 
-  it("Cài đặt: trạng thái AI, không hiện khóa; báo khi chưa tìm kiếm được trên mạng", async () => {
+  it("chế độ Gemini (SMC_LOOKUP_PROVIDER=auto) vẫn gắn nhãn AI", async () => {
+    api.aiProvider = "auto";
+    api.job = job("uncertain", [candidate(1, "Augmentin 250mg/31,25mg", "250mg/31,25mg", 77.5)]);
+    const user = userEvent.setup();
+    renderApp("/scan/result/job1");
+    const panel = await screen.findByTestId("ai-panel");
+    await user.click(within(panel).getByRole("button", { name: "Tìm trên mạng" }));
+    expect(await within(panel).findByText("AI · đã tra trên mạng")).toBeInTheDocument();
+  });
+
+  it("Cài đặt: chỉ Tavily → Gemini hiện “Đang tắt”, không hiện khóa hay danh sách mô hình", async () => {
+    renderApp("/settings");
+    expect(await screen.findByText("Tra cứu thuốc trên mạng")).toBeInTheDocument();
+    expect(await screen.findByText("Tavily · không dùng AI")).toBeInTheDocument();
+    expect(screen.getByText("Đã cấu hình")).toBeInTheDocument();
+    expect(screen.getByText("Đang tắt")).toBeInTheDocument();
+    expect(screen.getByText(/SMC_LOOKUP_PROVIDER=auto/)).toBeInTheDocument();
+    expect(screen.queryByText("gemini-3.5-flash")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/tvly-|AQ\./);
+  });
+
+  it("Cài đặt: chế độ auto báo khi Gemini chưa tìm kiếm được trên mạng", async () => {
+    api.aiProvider = "auto";
     api.aiSearch = false;
     renderApp("/settings");
-    expect(await screen.findByText("AI tra cứu thuốc (Gemini)")).toBeInTheDocument();
-    expect(await screen.findByText("Đã cấu hình")).toBeInTheDocument();
+    expect(await screen.findByText("Gemini → Tavily")).toBeInTheDocument();
     expect(screen.getByText(/bật thanh toán cho khóa trong Google AI Studio/)).toBeInTheDocument();
-    expect(screen.getByText("gemini-3.8-flash → gemini-flash-lite-latest")).toBeInTheDocument();
+    expect(screen.getByText("gemini-3.5-flash")).toBeInTheDocument();
   });
 });

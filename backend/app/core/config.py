@@ -17,8 +17,13 @@ APP_VERSION = "2.0.0"
 DEFAULT_PUBLIC_PORT = 8000
 DEFAULT_ADMIN_PORT = 8001
 DEFAULT_CATALOG_FILENAMES = ("DAV_unique.xlsx", "DAV_unique (1).xlsx")
-# Thứ tự thử: mô hình mới nhất trước; quá tải/không dùng được thì tự chuyển mô hình sau (đổi bằng SMC_GEMINI_MODELS).
-DEFAULT_GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-flash-lite-latest")
+# Mô hình Gemini (đổi bằng SMC_GEMINI_MODELS; nhiều mô hình cách nhau dấu phẩy: quá tải thì tự chuyển mô hình sau).
+DEFAULT_GEMINI_MODELS = ("gemini-3.5-flash",)
+# Nguồn tra cứu trên mạng khi dữ liệu nội bộ không có (SMC_LOOKUP_PROVIDER):
+#  - "tavily": CHỈ tìm kiếm web Tavily + quy tắc đối chiếu số đăng ký với danh mục, không gọi AI (mặc định).
+#  - "auto":   Gemini (AI + Google Search) trước, không được thì Tavily.
+#  - "gemini": chỉ Gemini.
+LOOKUP_PROVIDERS = ("tavily", "auto", "gemini")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
@@ -137,6 +142,7 @@ class Settings:
     gemini_timeout: float = 25.0
     # Tra mã vạch trên mạng KHÔNG dùng AI (Tavily Search API + quy tắc đối chiếu số đăng ký). Khóa chỉ nằm trong server.env.
     tavily_api_key: str | None = field(default=None, repr=False)
+    lookup_provider: str = "tavily"
 
     @property
     def images_dir(self) -> Path:
@@ -245,4 +251,6 @@ def load_settings() -> Settings:
     s.gemini_models = _list(get("SMC_GEMINI_MODELS"), list(DEFAULT_GEMINI_MODELS))
     s.gemini_timeout = float(get("SMC_GEMINI_TIMEOUT", "25") or 25)
     s.tavily_api_key = (get("SMC_TAVILY_API_KEY") or "").strip() or None
+    provider = (get("SMC_LOOKUP_PROVIDER") or "tavily").strip().lower()
+    s.lookup_provider = provider if provider in LOOKUP_PROVIDERS else "tavily"
     return s

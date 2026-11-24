@@ -128,18 +128,25 @@ lại (hoặc đặt `SMC_SERVER_URL`). Phiên đăng nhập được mã hóa b
 Địa chỉ công khai được **gài sẵn** trong `mobile/app.json` → `expo.extra.apiUrl` (người dùng không phải nhập; đổi máy chủ thì
 sửa giá trị này rồi build lại). Người dùng tự đăng ký (luôn là SCANNER) hoặc quản trị viên tạo tài khoản ở *Quản trị → Tài khoản*.
 
-**AI tìm thông tin thuốc trên mạng (Gemini)** — thêm vào `server.env` rồi khởi động lại dịch vụ:
-`SMC_GEMINI_API_KEY=<khóa từ Google AI Studio>` (tùy chọn `SMC_GEMINI_MODELS`, `SMC_GEMINI_TIMEOUT`). Kiểm tra ở ứng dụng
-Windows → *Cài đặt → AI tra cứu thuốc (Gemini)*. Tìm kiếm trên mạng (Google Search grounding) cần khóa có hạn mức tìm kiếm —
-khóa miễn phí thường báo 429 “hết hạn mức” và hay gặp 503 “quá tải” giờ cao điểm → **bật thanh toán (billing) cho khóa** trong
-Google AI Studio. Khi chưa tra mạng được, ảnh quét/mã QR vẫn được AI đọc trực tiếp (ghi rõ “chỉ đọc ảnh”); mã vạch thì báo
-không khả dụng (không đoán). Khóa không bao giờ nằm trong ứng dụng Windows/điện thoại.
+**Tìm thông tin thuốc trên mạng — Tavily, KHÔNG dùng AI (mặc định)** — đăng ký miễn phí tại tavily.com (1.000 lượt/tháng,
+không cần thẻ), thêm vào `server.env` rồi khởi động lại dịch vụ:
 
-**Tra mã vạch trên mạng KHÔNG dùng AI (Tavily)** — đăng ký miễn phí tại tavily.com (1.000 lượt/tháng, không cần thẻ),
-thêm `SMC_TAVILY_API_KEY=tvly-…` vào `server.env` rồi khởi động lại dịch vụ. Mã vạch chưa có trong dữ liệu → nếu Gemini không
-tra được mạng thì máy chủ tìm trang có ĐÚNG dãy số mã vạch, lấy số đăng ký ghi cạnh mã, đối chiếu danh mục DAV và hiển thị thông
-tin của danh mục (ghi rõ “không dùng AI”, kèm nguồn). Mã QR có ghi số đăng ký được đọc thẳng (không cần mạng/AI). Mỗi mã chỉ
-tra một lần (lưu đệm 30 ngày). Trạng thái: ứng dụng Windows → *Cài đặt → AI tra cứu thuốc*.
+```
+SMC_TAVILY_API_KEY=tvly-…
+SMC_LOOKUP_PROVIDER=tavily        # tavily (mặc định) | auto (Gemini trước rồi Tavily) | gemini
+```
+
+Mã vạch chưa có trong dữ liệu → tìm trang có ĐÚNG dãy số mã vạch, lấy số đăng ký ghi cạnh mã. Ảnh quét “không có thuốc
+đúng” → chỉ dùng chữ có trong danh mục: tên thương mại trên hộp (không có thì hoạt chất), lấy số đăng ký gần tên trên trang
+(thuốc phải đúng tên thương mại trên hộp); ảnh không có chữ nào trong danh mục thì báo ngay, không tốn lượt. Mã QR là
+đường link → Tavily đọc trang đó; QR có số đăng ký → đọc thẳng, không cần mạng. Luôn đối chiếu danh mục DAV và hiển thị thông
+tin của danh mục (ghi rõ “không dùng AI”, kèm nguồn). Mỗi lần tra tốn 1 lượt Tavily; mỗi mã/lượt quét chỉ tra một lần (lưu đệm
+30 ngày). Trạng thái: ứng dụng Windows → *Cài đặt → Tra cứu thuốc trên mạng*.
+
+**Gemini (tùy chọn, đang tắt)** — `SMC_GEMINI_API_KEY=<khóa Google AI Studio>`, `SMC_GEMINI_MODELS=gemini-3.5-flash`, rồi
+`SMC_LOOKUP_PROVIDER=auto`. Đã thử ngày 25/11/2026 với khóa **miễn phí**: Google Search trả 429 “hết hạn mức” ngay lập tức, hỏi
+thường mất ~16 giây, đọc ảnh mất ~38 giây (vượt thời gian chờ 24 giây của ứng dụng) → chỉ nên bật lại khi đã **bật thanh toán
+(billing) cho khóa**. Khóa không bao giờ nằm trong ứng dụng Windows/điện thoại.
 
 **Dữ liệu mã vạch** — danh mục DAV không có mã vạch. Xin file **danh mục hàng hóa** xuất từ phần mềm quản lý của nhà thuốc
 (Excel/CSV có cột *Mã vạch* và *Số đăng ký*, có thì thêm *Tên thuốc*, *Hàm lượng*, *Hãng sản xuất*) → ứng dụng Windows →

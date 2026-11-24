@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { ArrowRight, BarChart3, Check, ChevronRight, CircleAlert, ScanLine, Sparkles, Target } from "lucide-react-native";
+import { ArrowRight, BarChart3, Check, ChevronRight, CircleAlert, Globe, ScanLine, Target } from "lucide-react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { api, type Candidate, type ScanJob } from "@/api";
@@ -61,7 +61,7 @@ export function ResultView({ job, historyId, initialSelected, onBack }: { job: S
   const compact = width < 380;
 
   const rescan = () => router.navigate("/scan");
-  // Người dùng xác nhận không có thuốc đúng → AI đọc ảnh của lượt quét này + tìm trên mạng.
+  // Người dùng xác nhận không có thuốc đúng → máy chủ tìm tên thuốc của lượt quét này trên mạng (Tavily, hoặc Gemini).
   const askAi = () => router.push({ pathname: "/ai-lookup", params: { kind: "scan", jobId: job.id } });
   const pickOther = async () => {
     const image = await pickFromLibrary().catch(() => null);
@@ -110,10 +110,10 @@ export function ResultView({ job, historyId, initialSelected, onBack }: { job: S
       </View>
       <Pressable onPress={askAi} accessibilityRole="button" testID="ai-not-listed"
         style={({ pressed }) => [styles.aiRow, pressed && { opacity: 0.85 }]}>
-        <View style={styles.aiIcon}><Sparkles size={22} color={colors.primary} strokeWidth={2} /></View>
+        <View style={styles.aiIcon}><Globe size={22} color={colors.primary} strokeWidth={2} /></View>
         <View style={{ flex: 1 }}>
           <Text style={[T.label, { fontSize: 15.5 }]}>Không có thuốc đúng?</Text>
-          <Text style={[T.small, { fontSize: 13.5, marginTop: 1 }]}>Tìm trên mạng bằng AI từ ảnh vừa chụp</Text>
+          <Text style={[T.small, { fontSize: 13.5, marginTop: 1 }]}>Tìm tên thuốc trên hộp vừa chụp trên mạng</Text>
         </View>
         <ChevronRight size={20} color={colors.muted} />
       </Pressable>

@@ -1,4 +1,4 @@
-import { BadgeCheck, ChevronRight, ExternalLink, Globe, LoaderCircle, Pill, ShieldAlert, Sparkles } from "lucide-react";
+import { BadgeCheck, ChevronRight, ExternalLink, Globe, LoaderCircle, Pill, Search, ShieldAlert, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { PrimaryButton } from "@/components/Button";
@@ -17,8 +17,9 @@ const CONFIDENCE = {
 } as const;
 
 /**
- * "Không có thuốc đúng? Tìm trên mạng bằng AI" — chỉ chạy khi người dùng bấm (xác nhận không có kết quả đúng).
- * Máy chủ gọi Gemini + Google Search với ảnh và chữ OCR của lượt quét; kết quả chỉ để tham khảo, không tự vào tủ thuốc.
+ * "Không có thuốc đúng? Tìm trên mạng" — chỉ chạy khi người dùng bấm (xác nhận không có kết quả đúng).
+ * Máy chủ tìm tên thuốc in trên hộp trên Internet (Tavily, không AI — mặc định) hoặc hỏi Gemini, tùy SMC_LOOKUP_PROVIDER;
+ * kết quả chỉ để tham khảo, không tự vào tủ thuốc.
  */
 export function AiLookupPanel({ jobId }: { jobId: string }) {
   const t = useT();
@@ -55,22 +56,22 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
     <Card padding="lg" data-testid="ai-panel">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <IconTile icon={Sparkles} tone="info" />
+          <IconTile icon={Globe} tone="info" />
           <div>
-            <h2 className="font-display text-[19px] font-bold text-navy">{t("Không có thuốc đúng? Tìm trên mạng bằng AI")}</h2>
-            <p className="mt-0.5 text-[13px] text-muted">{t("Gemini đọc ảnh vừa quét và tra cứu trên Internet. Kết quả chỉ để tham khảo, không tự lưu vào tủ.")}</p>
+            <h2 className="font-display text-[19px] font-bold text-navy">{t("Không có thuốc đúng? Tìm trên mạng")}</h2>
+            <p className="mt-0.5 text-[13px] text-muted">{t("Máy chủ tìm tên thuốc in trên hộp trên Internet rồi đối chiếu số đăng ký với danh mục Cục Quản lý Dược. Kết quả chỉ để tham khảo, không tự lưu vào tủ.")}</p>
           </div>
         </div>
-        <PrimaryButton variant={state === "idle" ? "primary" : "secondary"} icon={state === "loading" ? LoaderCircle : Sparkles} loading={state === "loading"}
+        <PrimaryButton variant={state === "idle" ? "primary" : "secondary"} icon={state === "loading" ? LoaderCircle : Search} loading={state === "loading"}
           onClick={() => void run()}>
-          {state === "idle" ? t("Tìm bằng AI") : t("Tìm lại")}
+          {state === "idle" ? t("Tìm trên mạng") : t("Tìm lại")}
         </PrimaryButton>
       </div>
 
       {state === "loading" && (
         <div className="mt-5 flex items-center gap-3 rounded-2xl bg-scan-panel px-4 py-3.5 text-[14px] font-medium text-primary" role="status">
           <LoaderCircle size={18} className="animate-spin" />
-          {t("AI đang tìm thông tin thuốc… {seconds} giây (thường 5–20 giây)", { seconds: elapsed })}
+          {t("Đang tìm thông tin thuốc trên mạng… {seconds} giây", { seconds: elapsed })}
         </div>
       )}
 
@@ -89,7 +90,7 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
         <div className="mt-5 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]" data-testid="ai-result">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <StatusIndicator tone="info" size="sm" icon={data.mode === "web" ? Globe : Sparkles}>
+              <StatusIndicator tone="info" size="sm" icon={data.mode === "offline" ? Sparkles : Globe}>
                 {t({ web: "AI · đã tra trên mạng", offline: "AI · chỉ đọc ảnh (chưa tra được mạng)", search: "Tra trên mạng · không dùng AI", text: "Đọc từ nội dung mã · không dùng AI" }[data.mode ?? "web"])}
               </StatusIndicator>
               {confidence && <StatusIndicator tone={confidence.tone} size="sm">{t(confidence.label)}</StatusIndicator>}
@@ -104,7 +105,7 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
                 { label: t("Quy cách"), value: info.quy_cach },
                 { label: t("Số đăng ký"), value: info.so_dang_ky },
                 { label: t("Nhà sản xuất"), value: [info.nha_san_xuat, info.nuoc_san_xuat].filter(Boolean).join(" · ") || null },
-                ...(info.ghi_chu ? [{ label: t("Ghi chú của AI"), value: info.ghi_chu }] : []),
+                ...(info.ghi_chu ? [{ label: data.mode === "web" || data.mode === "offline" ? t("Ghi chú của AI") : t("Ghi chú"), value: info.ghi_chu }] : []),
               ]} />
             </div>
           </div>

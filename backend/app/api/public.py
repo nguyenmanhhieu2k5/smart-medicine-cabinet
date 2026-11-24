@@ -334,8 +334,8 @@ def ai_scan(job_id: uuid.UUID, ctx: AppContext = Depends(get_ctx), principal: Pr
     material = ctx.ocr.ai_material(str(job_id), user_id=principal.user_id)
     if material is None:
         raise not_found("Không tìm thấy lượt quét này.")
-    image, text = material
-    return ctx.ai.lookup_scan(str(job_id), image=image, ocr_text=text, user_id=principal.user_id)
+    image, text, lines = material
+    return ctx.ai.lookup_scan(str(job_id), image=image, ocr_text=text, lines=lines, user_id=principal.user_id)
 
 
 # --------------------------------------------------------------------------- #

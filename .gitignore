@@ -40,3 +40,6 @@ mobile/.expo/
 
 # Ảnh mã vạch/QR dùng để quét thử (tạo lại được)
 ma-thu/
+
+# File khóa tạm của Word/Excel khi đang mở tài liệu
+~$*

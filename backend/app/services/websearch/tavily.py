@@ -1,7 +1,9 @@
 """Tavily Search API (https://docs.tavily.com) — tìm kiếm web, KHÔNG có AI ở phía máy chủ này.
 
 - POST https://api.tavily.com/search, khóa trong header `Authorization: Bearer tvly-…` (không nằm trên URL/nhật ký).
-- Gói miễn phí: 1.000 lượt/tháng; tìm "basic" = 1 lượt.
+- POST https://api.tavily.com/extract: lấy nội dung MỘT trang (đường link trong mã QR) — Tavily tải trang, máy chủ này
+  không tự truy cập link lạ.
+- Gói miễn phí: 1.000 lượt/tháng; tìm "basic" = 1 lượt; extract "basic" = 1 lượt cho tối đa 5 trang.
 - Lỗi: 401 sai khóa; 432/433 hết hạn mức gói; 429/434 quá tải/quá nhanh; 5xx lỗi máy chủ Tavily.
 """
 from __future__ import annotations
@@ -14,6 +16,7 @@ import httpx
 
 log = logging.getLogger("smc.websearch")
 API_URL = "https://api.tavily.com/search"
+EXTRACT_URL = "https://api.tavily.com/extract"
 
 
 class SearchError(Exception):
@@ -56,8 +59,28 @@ class TavilyClient:
             "include_answer": False,  # không dùng câu trả lời do AI của Tavily tạo
             "exact_match": exact,
         }
+        data = self._post(API_URL, body)
+        return [
+            SearchResult(title=str(r.get("title") or ""), url=str(r.get("url") or ""), content=str(r.get("content") or ""),
+                         raw_content=str(r.get("raw_content") or "")[:60_000])
+            for r in data.get("results") or [] if r.get("url")
+        ]
+
+    def extract(self, url: str) -> SearchResult | None:
+        """Nội dung chữ của một trang; None nếu Tavily không tải được trang đó."""
+        if not self.configured:
+            raise SearchError("not_configured", "Chưa cấu hình khóa Tavily trên máy chủ (SMC_TAVILY_API_KEY trong server.env).")
+        data = self._post(EXTRACT_URL, {"urls": [url[:2000]], "extract_depth": "basic", "format": "text"})
+        for r in data.get("results") or []:
+            text = str(r.get("raw_content") or "")[:60_000]
+            if text.strip():
+                first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+                return SearchResult(title=str(r.get("title") or first[:200]), url=str(r.get("url") or url), content="", raw_content=text)
+        return None
+
+    def _post(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = self._http.post(API_URL, headers={"Authorization": f"Bearer {self.api_key}"}, json=body)
+            response = self._http.post(url, headers={"Authorization": f"Bearer {self.api_key}"}, json=body)
         except httpx.TimeoutException as exc:
             self.last_error = "Tavily không phản hồi kịp."
             raise SearchError("busy", self.last_error) from exc
@@ -66,12 +89,7 @@ class TavilyClient:
             raise SearchError("error", self.last_error) from exc
         if response.status_code == 200:
             self.last_error = None
-            data = response.json()
-            return [
-                SearchResult(title=str(r.get("title") or ""), url=str(r.get("url") or ""), content=str(r.get("content") or ""),
-                             raw_content=str(r.get("raw_content") or "")[:60_000])
-                for r in data.get("results") or [] if r.get("url")
-            ]
+            return response.json() or {}
         detail = ""
         try:
             detail = str(((response.json() or {}).get("detail") or {}).get("error") or "")[:160]
