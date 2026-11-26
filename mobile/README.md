@@ -51,6 +51,10 @@ Nhận EAN-13/8, UPC, ITF-14, DataMatrix, QR (GS1 Digital Link), Code 128. Camer
 lại sau 10 giây; QR quảng cáo và mã nội bộ của cửa hàng bị bỏ qua. Điện thoại **chỉ tra cứu** — dữ liệu mã vạch do quản trị
 viên nhập trên ứng dụng Windows (`src/scan/barcode.ts`).
 
+**Ảnh chọn từ thư viện cũng quét được mã**: máy chủ đọc mã vạch/QR trên ảnh cùng lúc với OCR (zxing-cpp). Màn *Kết quả* hiện
+các mã đọc được; mã khớp dữ liệu thì thuốc đó đứng đầu; mã chưa có dữ liệu thì *“Không có thuốc đúng?”* tra **đúng mã đó**
+trên mạng thay cho chữ trên hộp (`src/screens/ResultView.tsx`).
+
 ## Tìm trên mạng
 
 Màn `app/(app)/ai-lookup.tsx`: mã vạch hợp lệ nhưng chưa có trong dữ liệu, hoặc mã QR không theo chuẩn GS1 → **tự mở**; ở

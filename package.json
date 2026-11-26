@@ -23,6 +23,11 @@
     "lint": "npm --prefix frontend run lint && npm --prefix frontend run typecheck",
     "models": "node scripts/run-python.mjs scripts/download_ocr_models.py",
     "test:desktop:packed": "node tests/desktop/smoke.mjs --packed",
+    "test:desktop:scan": "node tests/desktop/live-code.mjs",
+    "test:desktop:voice": "node tests/desktop/tts-voice.mjs",
+    "test:desktop:glare": "node tests/desktop/glare.mjs",
+    "build:web": "npm --prefix mobile run export:web",
+    "test:web": "node tests/desktop/web-guest.mjs",
     "test:e2e": "node scripts/run-python.mjs scripts/e2e_server.py"
   },
   "devDependencies": {

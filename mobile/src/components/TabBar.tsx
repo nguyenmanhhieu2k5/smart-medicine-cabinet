@@ -1,8 +1,9 @@
 import { router, type Href } from "expo-router";
 import type { BottomTabBarProps } from "expo-router/js-tabs";
-import { Clock, ScanLine, User, type LucideIcon } from "lucide-react-native";
+import { Clock, LogIn, ScanLine, User, type LucideIcon } from "lucide-react-native";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAuth } from "@/auth/AuthProvider";
 import { colors, font } from "@/theme";
 import { useTabBarHidden } from "./tabBarVisibility";
 
@@ -12,16 +13,20 @@ const ITEMS: Record<string, { label: string; icon: LucideIcon }> = {
   profile: { label: "HỒ SƠ", icon: User },
 };
 
-/** Thanh điều hướng dưới: QUÉT — LỊCH SỬ — HỒ SƠ, mục đang chọn màu xanh + gạch chân (thiết kế 05, 09). */
+/**
+ * Thanh điều hướng dưới: QUÉT — LỊCH SỬ — HỒ SƠ, mục đang chọn màu xanh + gạch chân (thiết kế 05, 09).
+ * Trang web, khách chưa đăng nhập: chỉ QUÉT + ĐĂNG NHẬP (lịch sử và hồ sơ cần tài khoản).
+ */
 export function TabBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const hidden = useTabBarHidden();
+  const guest = useAuth().status === "guest";
   if (hidden) return null;
   return (
     <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 10) }]} accessibilityRole="tablist">
       {state.routes.map((route, index) => {
         const item = ITEMS[route.name];
-        if (!item) return null;
+        if (!item || (guest && route.name !== "scan")) return null;
         const focused = state.index === index;
         const color = focused ? colors.primary : "#7A8499";
         const onPress = () => {
@@ -39,6 +44,13 @@ export function TabBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
           </Pressable>
         );
       })}
+      {guest ? (
+        <Pressable onPress={() => router.push("/login")} accessibilityRole="button" accessibilityLabel="Đăng nhập" style={styles.item} testID="tab-login">
+          <LogIn size={26} color="#7A8499" strokeWidth={1.8} />
+          <Text style={[styles.label, { color: "#7A8499" }]}>ĐĂNG NHẬP</Text>
+          <View style={styles.underline} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }

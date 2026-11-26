@@ -1,5 +1,5 @@
-import { router } from "expo-router";
-import { Lock, Mail, Server, ShieldCheck } from "lucide-react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Lock, Mail, ScanLine, Server, ShieldCheck } from "lucide-react-native";
 import { useRef, useState } from "react";
 import { Pressable, Text, View, type TextInputInstance } from "react-native";
 import { ApiError } from "@/api";
@@ -14,7 +14,11 @@ import { colors, font } from "@/theme";
  * (/api/v1/app/config → providers) — hiện máy chủ chưa hỗ trợ nên không hiển thị nút giả.
  */
 export default function LoginScreen() {
-  const { login, config, serverUrl, lastEmail, notice, clearNotice } = useAuth();
+  const { login, config, serverUrl, lastEmail, notice, clearNotice, status, guest } = useAuth();
+  const { reason } = useLocalSearchParams<{ reason?: string }>();
+  // Trang web: khách quét thử hết lượt thì được đưa tới đây; còn lượt thì có thể quay lại quét thử.
+  const limitReached = reason === "guest_limit" || (status === "guest" && guest !== null && guest.remaining <= 0);
+  const canTryMore = status === "guest" && guest !== null && guest.remaining > 0;
   const [email, setEmail] = useState(lastEmail);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,6 +58,14 @@ export default function LoginScreen() {
         <Text style={[T.body, { marginTop: 8, fontSize: 16 }]}>Đăng nhập để nhận diện và tra cứu thuốc.</Text>
       </View>
 
+      {limitReached ? (
+        <View style={{ marginTop: 20 }} testID="guest-limit-notice">
+          <InfoBox icon={ScanLine} title={`Bạn đã dùng hết ${guest?.limit ?? config?.guest?.scans ?? 5} lượt quét thử`}>
+            Đăng nhập hoặc tạo tài khoản miễn phí để quét tiếp không giới hạn, lưu lịch sử quét và xem tủ thuốc.
+          </InfoBox>
+        </View>
+      ) : null}
+
       {!serverUrl ? (
         <Pressable onPress={() => router.push("/server")} style={{ marginTop: 24 }} accessibilityRole="button">
           <InfoBox icon={Server} title="Chưa cấu hình máy chủ">Nhấn để nhập địa chỉ máy chủ Mini PC do quản trị viên cung cấp.</InfoBox>
@@ -84,6 +96,11 @@ export default function LoginScreen() {
             <Text style={[T.body, { color: colors.primary, fontFamily: font.bold }]}>Đăng ký</Text>
           </Pressable>
         </View>
+      ) : null}
+
+      {canTryMore ? (
+        <LinkButton title={`Quét thử tiếp không cần đăng nhập (còn ${guest?.remaining} lượt)`} icon={ScanLine}
+          onPress={() => (router.canGoBack() ? router.back() : router.replace("/scan"))} style={{ alignSelf: "center", marginTop: 16 }} />
       ) : null}
 
       <View style={{ flex: 1, minHeight: 28 }} />

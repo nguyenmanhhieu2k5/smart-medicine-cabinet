@@ -179,6 +179,8 @@ class PaddleOcrEngine:
         self._device: str | None = None  # thiết bị thật sự dùng sau khi nạp
         self._gpu_name: str | None = None
         self._device_note: str | None = None
+        self._textline: bool | None = None  # phân loại hướng dòng chữ thật sự dùng (None khi chưa nạp)
+        self._textline_note: str | None = None
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -223,6 +225,15 @@ class PaddleOcrEngine:
             roots = self.model_roots + [self.cache_dir]
             det_dir = find_model_dir(det_name, self.config.engine, roots)
             rec_dir = find_model_dir(rec_name, self.config.engine, roots)
+            # Xoay dòng chữ (0°/180°, kể cả chữ in dọc trên vỉ thuốc): chỉ dùng khi đã có mô hình trên máy — không tự
+            # tải lúc nạp (máy chủ có thể không có Internet; bản ONNX của mô hình này không đi kèm).
+            ori_dir = find_model_dir(TEXTLINE_ORI_MODEL, self.config.engine, roots) if self.config.use_textline_orientation else None
+            self._textline = ori_dir is not None
+            self._textline_note = (
+                f"Chưa có mô hình {TEXTLINE_ORI_MODEL} ({self.config.engine}) — tạm tắt phân loại hướng dòng chữ. "
+                "Tải bằng: scripts/download_ocr_models.py --format paddle --textline"
+                if self.config.use_textline_orientation and ori_dir is None else None
+            )
             kwargs: dict[str, Any] = dict(
                 engine=self.config.engine,
                 cpu_threads=self.config.cpu_threads or default_cpu_threads(),
@@ -230,7 +241,7 @@ class PaddleOcrEngine:
                 text_recognition_model_name=rec_name,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
-                use_textline_orientation=bool(self.config.use_textline_orientation),
+                use_textline_orientation=self._textline,
                 text_det_limit_side_len=int(self.config.det_limit_side_len),
                 text_det_limit_type="max",
             )
@@ -238,11 +249,9 @@ class PaddleOcrEngine:
                 kwargs["text_detection_model_dir"] = str(det_dir)
             if rec_dir is not None:
                 kwargs["text_recognition_model_dir"] = str(rec_dir)
-            if self.config.use_textline_orientation:
+            if ori_dir is not None:
                 kwargs["textline_orientation_model_name"] = TEXTLINE_ORI_MODEL
-                ori_dir = find_model_dir(TEXTLINE_ORI_MODEL, self.config.engine, roots)
-                if ori_dir is not None:
-                    kwargs["textline_orientation_model_dir"] = str(ori_dir)
+                kwargs["textline_orientation_model_dir"] = str(ori_dir)
             self._model_sources = {
                 det_name: str(det_dir) if det_dir else "tải về bộ nhớ đệm khi nạp",
                 rec_name: str(rec_dir) if rec_dir else "tải về bộ nhớ đệm khi nạp",
@@ -349,6 +358,8 @@ class PaddleOcrEngine:
             "device": self._device,  # thiết bị thật sự dùng (None khi chưa nạp): "gpu:0" | "cpu"
             "gpu_name": self._gpu_name,
             "device_note": self._device_note,
+            "textline_orientation": self._textline,
+            "textline_note": self._textline_note,
             "loaded": self.is_loaded(),
             "load_seconds": self._load_seconds,
             "model_sources": self._model_sources,

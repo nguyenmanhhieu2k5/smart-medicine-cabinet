@@ -22,6 +22,7 @@ Không thiết bị nào cần chung mạng Wi-Fi với Mini PC. Không mở c�
 | Python 3.12 + `backend\.venv` | `python -m venv backend\.venv` rồi `backend\.venv\Scripts\python -m pip install -r backend\requirements.txt` |
 | PaddlePaddle GPU (tùy chọn) | `pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/` (đã kiểm chứng trên Quadro P1000) |
 | Mô hình OCR | `backend\.venv\Scripts\python scripts\download_ocr_models.py --profile v6_medium --format paddle` |
+| Giọng đọc tiếng Việt (tùy chọn) | `backend\.venv\Scripts\python scripts\download_tts_model.py` — Piper `vi_VN-vais1000-medium` (CC BY 4.0) vào `<SMC_DATA_DIR>\tts`; không có thì ứng dụng Windows đọc bằng giọng của Windows |
 | `data\DAV_unique.xlsx` | Danh mục 55.005 thuốc — máy chủ tự nhập vào PostgreSQL lần chạy đầu |
 | Tài khoản Tailscale | Miễn phí — cho kênh quản trị, và kênh công khai nếu dùng Funnel (bước 6A) |
 | Tài khoản Cloudflare + tên miền | Chỉ khi chọn Cloudflare Tunnel cho kênh công khai (bước 6B) |
@@ -111,6 +112,39 @@ powershell -ExecutionPolicy Bypass -File deploy\tailscale\setup-funnel.ps1
    Thử nhanh không cần tài khoản: `-QuickTest` (địa chỉ `*.trycloudflare.com`, đổi mỗi lần chạy).
 4. Ghi `SMC_PUBLIC_BASE_URL=https://api.<tên-miền>` vào `server.env` (bước 1 với `-PublicBaseUrl` đã làm) rồi khởi động
    lại dịch vụ: `Restart-Service SmartMedicineServer`. Nếu trước đó dùng Funnel: tắt bằng `setup-funnel.ps1 -Disable`.
+
+### 6C. Trang web quét thuốc với tên miền `.id.vn` **[Admin]**
+
+Trang web là **bản web của ứng dụng điện thoại**, do chính Mini PC phục vụ ở cổng Public (cùng địa chỉ với `/api/v1`,
+không cần máy chủ khác). Khách chưa đăng nhập **quét thử 5 lần** (ảnh hoặc mã vạch/QR — máy chủ đếm, không phải trình
+duyệt); từ lần thứ 6 phải đăng nhập/đăng ký; đăng nhập rồi dùng **như ứng dụng điện thoại** (quét không giới hạn, lịch sử,
+hồ sơ, tủ thuốc và sửa hạn dùng). Phiên đăng nhập nằm trong cookie HttpOnly (JavaScript không đọc được).
+
+1. Build trang web (đã có sẵn trong `mobile\dist-web`; build lại sau mỗi lần sửa ứng dụng):
+   ```
+   npm --prefix mobile run export:web
+   ```
+2. Bật trang web (PowerShell **Administrator**) — ghi `SMC_WEB_DIR`, `SMC_GUEST_SCANS=5` vào `server.env`, khởi động lại dịch vụ:
+   ```
+   powershell -ExecutionPolicy Bypass -File deploy\web\enable-web.ps1
+   ```
+   Dùng thử ngay qua địa chỉ Funnel hiện tại: `https://<mini-pc>.<tailnet>.ts.net:8443/`.
+3. Đăng ký tên miền `.id.vn` (ví dụ `tuthuoc.id.vn`) ở một nhà đăng ký tên miền .vn được VNNIC công nhận
+   (`id.vn` là tên miền cấp 2 dành cho cá nhân, có trong Public Suffix List nên dùng được với Cloudflare).
+4. Cloudflare (gói Free): *Add a site* → nhập `tuthuoc.id.vn` → Cloudflare cho 2 nameserver → vào trang quản lý tên miền
+   của nhà đăng ký, **đổi nameserver** sang 2 địa chỉ đó (chờ vài phút đến vài giờ đến khi Cloudflare báo *Active*).
+5. Cloudflare → Zero Trust → Networks → Tunnels → *Create tunnel (Cloudflared)* → copy **token** →
+   *Public Hostname*: hostname `tuthuoc.id.vn` (để trống subdomain) → Service **HTTP** → `127.0.0.1:8000`
+   (**không bao giờ** trỏ vào 8001). Trên Mini PC:
+   ```
+   powershell -ExecutionPolicy Bypass -File deploy\cloudflare\setup-cloudflared.ps1 -TunnelToken <TOKEN>
+   ```
+6. Mở `https://tuthuoc.id.vn` trên điện thoại/máy tính: camera chỉ chạy qua HTTPS (Cloudflare cấp sẵn chứng chỉ).
+
+Giới hạn chống lạm dụng (đổi trong `server.env`, khởi động lại dịch vụ): `SMC_GUEST_SCANS` (mặc định 5; `0` = phải
+đăng nhập ngay), `SMC_GUEST_IP_DAILY` (30 lượt khách/IP/ngày — người xóa dữ liệu trình duyệt để lấy lượt mới vẫn bị chặn),
+`SMC_GUEST_DAILY_TOTAL` (500 lượt khách/ngày cho toàn bộ trang — bảo vệ GPU và hạn mức Tavily). Ứng dụng điện thoại
+(APK) không đổi: vẫn đăng nhập ngay từ đầu.
 
 Trong các bước dưới, `<địa-chỉ-công-khai>` là `https://<mini-pc>.<tailnet>.ts.net:8443` (6A) hoặc `https://api.<tên-miền>` (6B).
 

@@ -110,7 +110,7 @@ export interface CabinetInput {
 export type ComponentStatus = "match" | "partial" | "conflict" | "not_observed" | "no_data";
 
 export interface MatchComponent {
-  key: "registration" | "name" | "strength" | "ingredient" | "form" | "manufacturer";
+  key: "registration" | "name" | "strength" | "ingredient" | "form" | "manufacturer" | "barcode";
   label: string;
   status: ComponentStatus;
   value: number | null;
@@ -169,11 +169,28 @@ export interface OcrJob {
       attempts: { variant: string; lines: number; quality: number; mean_score: number; elapsed_ms: number }[];
       engine: Record<string, unknown>;
     };
-    image: { width: number; height: number; sharpness: number; brightness: number };
+    /** glare: % vùng giữa ảnh bị lóa sáng (điểm cháy trắng) — có từ bản 2.0.0 cập nhật 26/11. */
+    image: { width: number; height: number; sharpness: number; brightness: number; glare?: number };
     expiry_suggestion: { date: string; precision: "day" | "month"; text: string; needs_confirmation: boolean } | null;
+    /** Mã vạch / mã QR máy chủ đọc được trên ảnh (bản cũ không có trường này). */
+    barcodes?: ScanBarcode[];
     match: MatchResult;
     elapsed_ms: number;
   } | null;
+}
+
+export interface ScanBarcode {
+  format: string; // "EAN-13", "QR Code", "Data Matrix"…
+  text: string;
+  kind: "gtin" | "internal" | "invalid";
+  gtin?: string | null;
+  display: string;
+  /** found: khớp dữ liệu · not_found: mã sản phẩm chưa có dữ liệu · internal: mã nội bộ cửa hàng · text: nội dung khác */
+  status: "found" | "not_found" | "internal" | "text";
+  medicine_id: number | null;
+  match_by: "barcode" | "registration" | null;
+  expiry: string | null;
+  lot: string | null;
 }
 
 export interface OcrDependencies {
@@ -200,6 +217,9 @@ export interface OcrStatus {
     device?: string | null;
     gpu_name?: string | null;
     device_note?: string | null;
+    /** Phân loại hướng dòng chữ thật sự dùng (tắt kèm ghi chú khi thiếu mô hình PP-LCNet). */
+    textline_orientation?: boolean | null;
+    textline_note?: string | null;
     loaded?: boolean;
     load_seconds?: number | null;
     models_available_offline?: boolean;
@@ -685,6 +705,8 @@ export interface BarcodeLookup {
   message: string;
   medicine: MedicineSummary | null;
   link: { source: "excel" | "csdlduoc"; match_method: "registration" | "name"; unit: string | null; import_id: number | null } | null;
+  /** Hạn dùng / số lô của chính hộp thuốc, đọc từ DataMatrix hoặc QR chuẩn GS1. */
+  gs1?: { expiry: string | null; lot: string | null; serial: string | null } | null;
 }
 
 // ---- AI tra cứu trên mạng (Gemini + Google Search; khóa chỉ nằm trên máy chủ) ---------------- //
@@ -728,4 +750,14 @@ export interface AiStatus {
   last_error: string | null;
   /** Tra mã vạch trên mạng không dùng AI (Tavily). */
   web_search?: { provider: string; configured: boolean; last_error: string | null };
+}
+
+/** Giọng đọc tiếng Việt tự nhiên của máy chủ (Piper vi_VN-vais1000, chạy offline trên Mini PC). */
+export interface TtsStatus {
+  id: string; // "server:vi_VN-vais1000" — giá trị lưu trong tts_voice khi chọn giọng này
+  name: string;
+  license: string;
+  engine: string;
+  available: boolean;
+  reason: string | null;
 }

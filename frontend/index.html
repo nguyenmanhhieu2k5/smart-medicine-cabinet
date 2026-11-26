@@ -6,7 +6,7 @@
     <!-- Giao diện chỉ nạp tài nguyên đóng gói sẵn; chỉ gọi API máy chủ Mini PC qua HTTPS (Tailscale) hoặc 127.0.0.1 khi chạy ngay trên Mini PC -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; media-src 'self' blob: mediastream:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; media-src 'self' blob: mediastream:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Tủ thuốc thông minh</title>

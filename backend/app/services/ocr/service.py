@@ -26,6 +26,7 @@ from app.models import OcrCandidateRecord, OcrJobRecord, OcrResultRecord, ScanHi
 from app.schemas.settings import AppSettings
 from app.services import history, settings_store
 from app.services.alerts import engine as alert_engine
+from app.services.barcode import decode as barcode_decode
 from app.services.medicine_matcher.catalog import CatalogRepository
 from app.services.medicine_matcher.matcher import MedicineMatcher, OcrLine
 from app.services.medicine_matcher.normalize import normalize_text
@@ -103,6 +104,7 @@ class OcrJob:
     error: str | None = None
     crop: Sequence[float] | None = None
     user_id: uuid.UUID | None = None
+    guest_key: str | None = None  # khách trên trang web (chưa đăng nhập)
     channel: str = "admin"
     thumb_path: Path | None = None
     cancel_requested: bool = False
@@ -184,6 +186,16 @@ def _maybe_deskew(engine, image, best, best_name, attempts, run):  # noqa: ANN00
         if out.quality() > best.quality() * IMPROVEMENT_FACTOR:
             return out, ("deskew" if best_name == "original" else f"{best_name}+deskew"), attempts
     return best, best_name, attempts
+
+
+def owns(job_user: uuid.UUID | None, job_guest: str | None, user_id: uuid.UUID | None, guest_key: str | None) -> bool:
+    """Lượt quét có thuộc người hỏi không. Khách chỉ thấy lượt của chính mình; tài khoản chỉ thấy lượt của mình;
+    không truyền ai (kênh quản trị) thì thấy tất cả."""
+    if guest_key is not None:
+        return job_guest == guest_key and job_user is None
+    if user_id is not None:
+        return job_user == user_id
+    return True
 
 
 class OcrService:
@@ -286,7 +298,7 @@ class OcrService:
     # ---- công việc -------------------------------------------------------- #
     def submit(
         self, data: bytes, source: str = "upload", crop: Sequence[float] | None = None, *,
-        user_id: uuid.UUID | None = None, channel: str = "admin", actor: str | None = None,
+        user_id: uuid.UUID | None = None, channel: str = "admin", actor: str | None = None, guest_key: str | None = None,
     ) -> OcrJob:
         with self._lock:
             active = [j for j in self._jobs.values() if j.status in ACTIVE_STATUSES]
@@ -294,24 +306,30 @@ class OcrService:
             raise OcrBusy("Máy chủ đang bận nhận diện nhiều ảnh. Vui lòng thử lại sau ít phút.", 503)
         if user_id is not None and sum(1 for j in active if j.user_id == user_id) >= self.max_active_per_user:
             raise OcrBusy("Bạn đang có ảnh chờ nhận diện. Vui lòng đợi kết quả trước khi quét tiếp.", 429)
+        if guest_key is not None and sum(1 for j in active if j.guest_key == guest_key) >= self.max_active_per_user:
+            raise OcrBusy("Bạn đang có ảnh chờ nhận diện. Vui lòng đợi kết quả trước khi quét tiếp.", 429)
         image = preprocess.decode_image(data)  # ném ImageError nếu không phải ảnh
-        job = OcrJob(id=str(uuid.uuid4()), source=source, crop=crop, user_id=user_id, channel=channel)
+        job = OcrJob(id=str(uuid.uuid4()), source=source, crop=crop, user_id=user_id, guest_key=guest_key, channel=channel)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         image = preprocess.crop_relative(preprocess.limit_size(image), crop)
         job.image_path = self.uploads_dir / f"scan_{job.id}.jpg"
         job.image_path.write_bytes(preprocess.encode_jpeg(image))
-        if user_id is not None:
-            # Ảnh thu nhỏ cho lịch sử quét (xóa theo chính sách lưu giữ).
+        if user_id is not None or guest_key is not None:
+            # Ảnh thu nhỏ cho lịch sử quét / trang kết quả (xóa theo chính sách lưu giữ).
             self.scans_dir.mkdir(parents=True, exist_ok=True)
             job.thumb_path = self.scans_dir / f"{job.id}_thumb.jpg"
             job.thumb_path.write_bytes(preprocess.encode_jpeg(preprocess.limit_size(image, 360), quality=80))
         with self.db.session() as s:
             s.add(OcrJobRecord(
-                id=uuid.UUID(job.id), user_id=user_id, channel=channel, source=source, status="queued", progress=0,
+                id=uuid.UUID(job.id), user_id=user_id, guest_key=guest_key, channel=channel, source=source, status="queued",
+                progress=0,
                 message=job.message, image_path=str(job.image_path), thumb_path=str(job.thumb_path) if job.thumb_path else None,
                 image_width=int(image.shape[1]), image_height=int(image.shape[0]), created_at=job.created_at,
             ))
-            origin = "Ứng dụng di động" if channel == "public" else ("Chụp từ camera" if source == "camera" else "Chọn ảnh từ máy tính")
+            if channel == "public":
+                origin = "Trang web (khách chưa đăng nhập)" if guest_key else "Ứng dụng di động"
+            else:
+                origin = "Chụp từ camera" if source == "camera" else "Chọn ảnh từ máy tính"
             history.record(
                 s, "scan", "scan", "Quét thuốc", origin + (f" · {actor}" if actor and channel == "public" else ""),
                 {"job_id": job.id, "source": source, "channel": channel},
@@ -326,11 +344,11 @@ class OcrService:
     def get(self, job_id: str) -> OcrJob | None:
         return self._jobs.get(job_id)
 
-    def load(self, job_id: str, *, user_id: uuid.UUID | None = None) -> dict[str, Any] | None:
-        """Trạng thái/kết quả của một lượt quét (bộ nhớ hoặc CSDL). Lọc theo chủ sở hữu nếu có user_id."""
+    def load(self, job_id: str, *, user_id: uuid.UUID | None = None, guest_key: str | None = None) -> dict[str, Any] | None:
+        """Trạng thái/kết quả của một lượt quét (bộ nhớ hoặc CSDL). Lọc theo chủ sở hữu nếu có user_id/guest_key."""
         job = self._jobs.get(job_id)
         if job is not None:
-            if user_id is not None and job.user_id != user_id:
+            if not owns(job.user_id, job.guest_key, user_id, guest_key):
                 return None
             return job.public()
         try:
@@ -339,7 +357,7 @@ class OcrService:
             return None
         with self.db.session() as s:
             rec = s.get(OcrJobRecord, jid)
-            if rec is None or (user_id is not None and rec.user_id != user_id):
+            if rec is None or not owns(rec.user_id, rec.guest_key, user_id, guest_key):
                 return None
             result = s.get(OcrResultRecord, jid)
             status = "error" if rec.status == "error" else rec.status
@@ -352,7 +370,8 @@ class OcrService:
                 "result": result.payload if result else None, "error": rec.error,
             }
 
-    def ai_material(self, job_id: str, *, user_id: uuid.UUID | None = None) -> tuple[bytes | None, str, list[dict]] | None:
+    def ai_material(self, job_id: str, *, user_id: uuid.UUID | None = None,
+                    guest_key: str | None = None) -> tuple[bytes | None, str, list[dict]] | None:
         """Ảnh (gốc nếu còn, không thì ảnh thu nhỏ) + chữ OCR + các dòng OCR (kèm khung chữ) của một lượt quét —
         để tra cứu trên mạng khi danh mục không có."""
         try:
@@ -361,7 +380,7 @@ class OcrService:
             return None
         with self.db.session() as s:
             rec = s.get(OcrJobRecord, jid)
-            if rec is None or (user_id is not None and rec.user_id != user_id):
+            if rec is None or not owns(rec.user_id, rec.guest_key, user_id, guest_key):
                 return None
             result = s.get(OcrResultRecord, jid)
             text = (result.raw_text if result else "") or ""
@@ -373,21 +392,21 @@ class OcrService:
                     break
             return image, text, lines
 
-    def thumbnail(self, job_id: str, *, user_id: uuid.UUID | None = None) -> Path | None:
+    def thumbnail(self, job_id: str, *, user_id: uuid.UUID | None = None, guest_key: str | None = None) -> Path | None:
         try:
             jid = uuid.UUID(job_id)
         except ValueError:
             return None
         with self.db.session() as s:
             rec = s.get(OcrJobRecord, jid)
-            if rec is None or (user_id is not None and rec.user_id != user_id) or not rec.thumb_path:
+            if rec is None or not owns(rec.user_id, rec.guest_key, user_id, guest_key) or not rec.thumb_path:
                 return None
             path = Path(rec.thumb_path)
             return path if path.is_file() else None
 
-    def cancel(self, job_id: str, *, user_id: uuid.UUID | None = None) -> bool:
+    def cancel(self, job_id: str, *, user_id: uuid.UUID | None = None, guest_key: str | None = None) -> bool:
         job = self._jobs.get(job_id)
-        if job is None or (user_id is not None and job.user_id != user_id) or job.status not in ACTIVE_STATUSES:
+        if job is None or not owns(job.user_id, job.guest_key, user_id, guest_key) or job.status not in ACTIVE_STATUSES:
             return False
         job.cancel_requested = True
         if job.status == "queued":
@@ -465,7 +484,9 @@ class OcrService:
         image_info = {
             "width": int(image.shape[1]), "height": int(image.shape[0]),
             "sharpness": round(preprocess.sharpness(image), 1), "brightness": round(preprocess.brightness(image), 1),
+            "glare": round(preprocess.glare_ratio(image) * 100, 1),  # % vùng giữa bị lóa → ứng dụng nhắc chụp lại
         }
+        codes = barcode_decode.read_codes(image)  # mã vạch/QR trên ảnh — vài chục ms, trước khi OCR
 
         loading = self._engine is None or self._engine_state != "ready"
         self._update(job, "recognizing", 25, "Đang nạp mô hình OCR" if loading else "Đang nhận dạng chữ")
@@ -483,9 +504,12 @@ class OcrService:
             repo = CatalogRepository(s)
             catalog_count = repo.count()
             match = MedicineMatcher(repo).match(output.lines)
+            barcodes = barcode_decode.resolve_codes(s, codes) if codes else []
             if catalog_count == 0:
                 match["status"] = "no_catalog"
                 match["message"] = "Chưa nhập danh mục thuốc. Hãy nhập file Excel trong Cài đặt."
+            else:
+                match = barcode_decode.merge_into_match(match, barcodes, repo)
             top = match["candidates"][0] if match["candidates"] else None
             history.record(
                 s, "scan", "ocr_completed", "OCR hoàn thành",
@@ -512,7 +536,8 @@ class OcrService:
                 "engine": engine.info(),
             },
             "image": image_info,
-            "expiry_suggestion": extract_expiry([ln.text for ln in output.lines]),
+            "expiry_suggestion": barcode_decode.expiry_from_codes(barcodes) or extract_expiry([ln.text for ln in output.lines]),
+            "barcodes": barcodes,
             "match": match,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
         }

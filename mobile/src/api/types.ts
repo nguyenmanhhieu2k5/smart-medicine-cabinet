@@ -8,6 +8,16 @@ export interface AppConfig {
   ocr_timeout_seconds: number;
   max_candidates: number;
   server_version: string;
+  /** Trang web: khách chưa đăng nhập được quét thử bấy nhiêu lần. Máy chủ cũ không có trường này. */
+  guest?: { enabled: boolean; scans: number };
+}
+
+/** Lượt quét thử còn lại của trình duyệt khách (trang web, chưa đăng nhập). */
+export interface GuestQuota {
+  enabled?: boolean;
+  limit: number;
+  used?: number;
+  remaining: number;
 }
 
 export interface UserPreferences {
@@ -36,7 +46,8 @@ export interface TokenResponse {
   access_token: string;
   token_type: "bearer";
   expires_in: number;
-  refresh_token: string;
+  /** null trên trang web: refresh token nằm trong cookie HttpOnly do máy chủ đặt. */
+  refresh_token: string | null;
   user: User;
 }
 
@@ -95,9 +106,28 @@ export interface ScanJob {
   result: {
     match: { status: MatchStatus; message: string; reasons: string[]; candidates: Candidate[] };
     ocr_text: string[];
+    /** Mã vạch / mã QR máy chủ đọc được trên ảnh (ảnh chọn từ thư viện cũng quét được mã). Máy chủ cũ không có trường này. */
+    barcodes?: ScanBarcode[];
     expiry_suggestion: unknown;
     elapsed_ms: number;
+    /** % vùng giữa ảnh bị lóa sáng (giấy bạc vỉ thuốc, hộp bóng, đèn flash). Máy chủ cũ không có trường này. */
+    glare?: number | null;
   } | null;
+  /** Chỉ có khi quét thử (khách trên trang web): số lượt còn lại sau lượt này. */
+  guest?: GuestQuota;
+}
+
+export interface ScanBarcode {
+  format: string; // "EAN-13", "QR Code", "Data Matrix"…
+  text: string;
+  kind: "gtin" | "internal" | "invalid";
+  display: string;
+  /** found: khớp dữ liệu · not_found: mã sản phẩm chưa có dữ liệu · internal: mã nội bộ cửa hàng · text: nội dung khác */
+  status: "found" | "not_found" | "internal" | "text";
+  medicine_id: number | null;
+  match_by: "barcode" | "registration" | null;
+  expiry: string | null;
+  lot: string | null;
 }
 
 export type HistoryStatus = "confident" | "uncertain" | "no_text" | "no_match" | "no_catalog" | "failed" | "cancelled";
@@ -132,6 +162,8 @@ export interface BarcodeResult {
   medicine: MedicineSummary | null;
   history_id: string | null;
   message: string;
+  /** Chỉ có khi quét thử (khách trên trang web): số lượt còn lại. */
+  guest?: GuestQuota;
 }
 
 /** Thông tin thuốc do AI (Gemini + Google Search) tổng hợp — chỉ thông tin nhận dạng, không có liều dùng. */

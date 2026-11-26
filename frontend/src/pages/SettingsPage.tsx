@@ -18,9 +18,10 @@ import { useLanguageStore, useT } from "@/i18n";
 import { api, connectionInfo, saveBlob } from "@/services/api";
 import { formatBytes, formatDateTime, formatNumber } from "@/services/format";
 import {
-  errorMessage, keys, useAiStatus, useBackups, useBarcodeStatus, useCatalogStatus, useDevice, useHealth, useOcrStatus, useSettings, useUpdateSettings,
+  errorMessage, keys, useAiStatus, useBackups, useBarcodeStatus, useCatalogStatus, useDevice, useHealth, useOcrStatus, useSettings, useTtsStatus,
+  useUpdateSettings,
 } from "@/services/queries";
-import { isVietnamese, speak, stopSpeaking, ttsSupported, useVoices } from "@/services/tts";
+import { isVietnamese, speak, stopSpeaking, ttsSupported, usesServerVoice, useVoices } from "@/services/tts";
 import { usePageHeader } from "@/stores/page";
 import { toast } from "@/stores/toast";
 import type { AppSettings, BarcodeImportReport, BarcodeLookup, SettingsPatch } from "@/types/api";
@@ -468,6 +469,7 @@ export function SettingsPage() {
   const health = useHealth().data;
   const ocr = useOcrStatus();
   const voices = useVoices();
+  const ttsServer = useTtsStatus().data;
   const [draft, setDraft] = useState<Draft>({});
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [speaking, setSpeaking] = useState(false);
@@ -507,6 +509,7 @@ export function SettingsPage() {
   };
 
   const viVoices = voices.filter(isVietnamese);
+  const serverVoice = ttsServer?.available === true;
   const deps = query.data?.options.ocr_dependencies;
   const ocrData = ocr.data;
   const activeProfile = query.data?.options.ocr_profiles.find((profile) => profile.value === stored.ocr_profile);
@@ -610,7 +613,7 @@ export function SettingsPage() {
           <Row label={t("Tự thử tiền xử lý khi ảnh khó đọc")} hint={t("Tăng tương phản, xoay, nắn nghiêng — chỉ dùng khi cho kết quả tốt hơn ảnh gốc.")}>
             <Toggle checked={value("ocr_auto_enhance")} onChange={(v) => set("ocr_auto_enhance", v)} label={t("Tự thử tiền xử lý")} />
           </Row>
-          <Row label={t("Phân loại hướng dòng chữ")} hint={t("Cần thêm mô hình PP-LCNet; bật nếu hay quét chữ lộn ngược.")}>
+          <Row label={t("Phân loại hướng dòng chữ")} hint={ocrData?.engine?.textline_note ?? t("Đọc đúng chữ in dọc hoặc lộn ngược (vỉ thuốc hay in như vậy). Dùng mô hình PP-LCNet đi kèm; thiếu mô hình thì tự tắt.")}>
             <Toggle checked={value("ocr_use_textline_orientation")} onChange={(v) => set("ocr_use_textline_orientation", v)} label={t("Phân loại hướng dòng chữ")} />
           </Row>
           <Row label={t("Lưu ảnh quét khi xác nhận")} hint={t("Tắt: ảnh chỉ giữ tạm và tự xóa. Bật: lưu một ảnh kèm thuốc trong tủ.")}>
@@ -649,27 +652,40 @@ export function SettingsPage() {
           </Row>
         </Section>
 
-        <Section id="tts" title={t("Giọng đọc")} hint={t("Đọc thông tin thuốc bằng giọng đã cài trên máy (hoạt động offline).")}>
+        <Section id="tts" title={t("Giọng đọc")} hint={serverVoice
+          ? t("Mặc định đọc bằng giọng tự nhiên do máy chủ Mini PC tạo (offline, không gửi dữ liệu ra ngoài). Có thể chọn giọng cài trên Windows thay thế.")
+          : t("Đọc thông tin thuốc bằng giọng đã cài trên máy (hoạt động offline).")}>
           <Row icon={Volume2} label={t("Bật đọc thông tin thuốc")}><Toggle checked={value("tts_enabled")} onChange={(v) => set("tts_enabled", v)} label={t("Bật đọc thông tin thuốc")} /></Row>
-          <Row label={t("Giọng đọc")} hint={!ttsSupported() ? t("Thiết bị không hỗ trợ đọc văn bản") : t("{count} giọng tiếng Việt", { count: viVoices.length })}>
-            <Select value={value("tts_voice") ?? ""} className="!h-10 !w-[280px]" aria-label={t("Giọng đọc")} disabled={voices.length === 0} onChange={(event) => set("tts_voice", event.target.value || null)}>
-              <option value="">{t("Tự chọn giọng tiếng Việt")}</option>
+          <Row label={t("Giọng đọc")} hint={serverVoice ? ttsServer?.license
+            : !ttsSupported() ? t("Thiết bị không hỗ trợ đọc văn bản") : t("{count} giọng tiếng Việt", { count: viVoices.length })}>
+            <Select value={value("tts_voice") ?? ""} className="!h-10 !w-[280px]" aria-label={t("Giọng đọc")} disabled={!serverVoice && voices.length === 0} onChange={(event) => set("tts_voice", event.target.value || null)}>
+              <option value="">{serverVoice ? `${t("Giọng tự nhiên tiếng Việt — máy chủ")} (${t("khuyên dùng")})` : t("Tự chọn giọng tiếng Việt")}</option>
               {[...viVoices, ...voices.filter((v) => !isVietnamese(v))].map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang})</option>)}
             </Select>
           </Row>
           <Row label={t("Tốc độ đọc")} hint={`${value("tts_rate").toFixed(2)}×`}>
             <input type="range" min={0.5} max={2} step={0.05} value={value("tts_rate")} aria-label={t("Tốc độ đọc")} onChange={(event) => set("tts_rate", Number(event.target.value))} className="w-44 accent-[var(--smc-primary)]" />
-            <PrimaryButton variant="soft" size="sm" icon={Volume2} disabled={!ttsSupported()}
-              onClick={() => {
+            <PrimaryButton variant="soft" size="sm" icon={Volume2} disabled={!serverVoice && !ttsSupported()}
+              onClick={async () => {
                 if (speaking) { stopSpeaking(); setSpeaking(false); return; }
-                const result = speak("Xin chào. Đây là giọng đọc thông tin thuốc của tủ thuốc thông minh.", { voiceUri: value("tts_voice"), rate: value("tts_rate"), onEnd: () => setSpeaking(false) });
-                if (result.ok) setSpeaking(true);
-                else toast.warning(t("Chưa có giọng đọc tiếng Việt"), t("Xem hướng dẫn bên dưới để cài giọng đọc."));
+                setSpeaking(true);
+                const result = await speak("Xin chào. Đây là giọng đọc thông tin thuốc của tủ thuốc thông minh. Paracetamol 500 mg, hạn sử dụng 15/06/2027.", {
+                  voiceUri: value("tts_voice"), rate: value("tts_rate"), serverAvailable: serverVoice, onEnd: () => setSpeaking(false),
+                });
+                if (!result.ok) {
+                  setSpeaking(false);
+                  toast.warning(t("Chưa có giọng đọc tiếng Việt"), t("Xem hướng dẫn bên dưới để cài giọng đọc."));
+                }
               }}>
               {speaking ? t("Dừng") : t("Đọc thử")}
             </PrimaryButton>
           </Row>
-          {ttsSupported() && viVoices.length === 0 && (
+          {ttsServer && !ttsServer.available && ttsServer.reason && (
+            <div className="mt-3">
+              <Note tone="info">{t("Giọng tự nhiên của máy chủ chưa sẵn sàng: {reason}", { reason: ttsServer.reason })}</Note>
+            </div>
+          )}
+          {!usesServerVoice(value("tts_voice"), serverVoice) && ttsSupported() && viVoices.length === 0 && (
             <div className="mt-3">
               <Note tone="warning">
                 {t("Máy chưa có giọng đọc tiếng Việt offline. Trên Windows 10/11: Settings → Time & language → Speech → Manage voices → Add voices → Vietnamese, rồi mở lại ứng dụng. Bạn cũng có thể chọn tạm một giọng khác trong danh sách.")}

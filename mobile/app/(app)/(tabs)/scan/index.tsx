@@ -1,6 +1,6 @@
-import { CameraView, useCameraPermissions } from "expo-camera";
-import { useIsFocused } from "expo-router";
-import { Barcode, Camera, CameraOff, Check, Flashlight, FlashlightOff, ImageIcon, ShieldCheck, User, X } from "lucide-react-native";
+import { CameraView } from "expo-camera";
+import { router, useIsFocused } from "expo-router";
+import { Barcode, Camera, CameraOff, Check, Flashlight, FlashlightOff, ImageIcon, LogIn, ScanLine, ShieldCheck, User, X } from "lucide-react-native";
 import { useRef, useState } from "react";
 import { ActivityIndicator, Linking, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useAuth } from "@/auth/AuthProvider";
@@ -8,8 +8,9 @@ import { AppHeaderBrand } from "@/components/brand";
 import { Screen } from "@/components/layout";
 import { Button, Chip, ErrorBanner, type as T } from "@/components/ui";
 import { BARCODE_TYPES, useBarcodeScanner } from "@/scan/barcode";
+import { useCameraAccess } from "@/scan/cameraPermission";
 import { pickFromLibrary, prepareImage, type ImageQuality } from "@/scan/image";
-import { cameraErrorMessage, scanErrorMessage, startScan } from "@/scan/startScan";
+import { cameraErrorMessage, promptLoginForMoreScans, scanErrorMessage, startScan } from "@/scan/startScan";
 import { colors, font } from "@/theme";
 
 function Corners() {
@@ -54,11 +55,33 @@ function RoleSheet({ visible, onClose }: { visible: boolean; onClose: () => void
   );
 }
 
+/** Trang web, khách chưa đăng nhập: số lượt quét thử còn lại + nút Đăng nhập (thay lời chào tài khoản). */
+function GuestHeader({ remaining, limit }: { remaining: number; limit: number }) {
+  const left = Math.max(0, remaining);
+  return (
+    <View style={styles.greeting} testID="guest-banner">
+      <View style={styles.avatar}><ScanLine size={28} color={colors.primary} strokeWidth={1.9} /></View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[T.body, { fontSize: 16, color: colors.navy }]}>Quét thử không cần đăng nhập</Text>
+        <Text style={styles.name} numberOfLines={1} testID="guest-remaining">
+          {left > 0 ? `Còn ${left}/${limit} lượt` : "Đã hết lượt quét thử"}
+        </Text>
+        <Text style={[T.small, { fontSize: 13 }]}>Đăng nhập để quét không giới hạn, lưu lịch sử và xem tủ thuốc.</Text>
+      </View>
+      <Button title="Đăng nhập" icon={LogIn} variant="secondary" style={{ minHeight: 44, paddingHorizontal: 14 }}
+        onPress={() => router.push("/login")} testID="guest-login" />
+    </View>
+  );
+}
+
 export default function ScanScreen() {
-  const { user } = useAuth();
+  const { user, status, guest } = useAuth();
+  const isGuest = status === "guest";
+  // Khách đã dùng hết lượt (máy chủ báo): bấm chụp/chọn ảnh → đăng nhập ngay, không gửi ảnh vô ích.
+  const outOfTries = isGuest && guest !== null && guest.remaining <= 0;
   const focused = useIsFocused();
   const { width } = useWindowDimensions();
-  const [permission, requestPermission] = useCameraPermissions();
+  const { permission, requestPermission } = useCameraAccess(focused);
   const camera = useRef<CameraView>(null);
   const [torch, setTorch] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -70,6 +93,7 @@ export default function ScanScreen() {
   const shutter = width < 375 ? 84 : 92;
 
   const capture = async () => {
+    if (outOfTries) return promptLoginForMoreScans();
     if (!camera.current || busy) return;
     setBusy("camera");
     setError(null);
@@ -88,6 +112,7 @@ export default function ScanScreen() {
   };
 
   const pick = async () => {
+    if (outOfTries) return promptLoginForMoreScans();
     if (busy) return;
     setBusy("upload");
     setError(null);
@@ -113,6 +138,7 @@ export default function ScanScreen() {
       <View style={styles.top}>
         <AppHeaderBrand />
       </View>
+      {isGuest ? <GuestHeader remaining={guest?.remaining ?? 0} limit={guest?.limit ?? 5} /> : (
       <View style={styles.greeting}>
         <View style={styles.avatar}><User size={30} color="#7A8BA8" strokeWidth={1.8} /></View>
         <View style={{ flex: 1, gap: 2 }}>
@@ -124,6 +150,7 @@ export default function ScanScreen() {
           <ShieldCheck size={26} color={colors.primary} strokeWidth={2} />
         </Pressable>
       </View>
+      )}
 
       <View style={styles.frame} testID="camera-frame">
         {granted && focused && !cameraError ? (

@@ -17,7 +17,7 @@ from app.models.catalog import CatalogBarcode
 from app.services import settings_store
 from app.services.barcode.gs1 import parse_code
 from app.services.barcode.importer import BarcodeImporter, BarcodeImportError
-from app.services.barcode.lookup import barcode_status, find_medicine
+from app.services.barcode.lookup import barcode_status, find_medicine, gs1_extra
 from app.services.medicine_matcher.catalog import CatalogRepository, medicine_summary
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -156,7 +156,7 @@ async def barcodes_import(
 def barcodes_lookup(code: str = Query(..., min_length=1, max_length=400), ctx: AppContext = Depends(get_ctx)) -> dict:
     parsed = parse_code(code)
     out: dict = {"status": parsed.kind, "code": parsed.display, "gtin": parsed.gtin, "message": parsed.message,
-                 "medicine": None, "link": None}
+                 "medicine": None, "link": None, "gs1": gs1_extra(parsed)}
     if parsed.kind != "gtin" or parsed.gtin is None:
         return out
     with ctx.db.session() as s:

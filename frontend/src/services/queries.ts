@@ -22,6 +22,7 @@ export const keys = {
   catalog: ["catalog"] as const,
   barcodes: ["catalog", "barcodes"] as const,
   aiStatus: ["ai", "status"] as const,
+  ttsStatus: ["tts", "status"] as const,
   ocrJob: (id: string) => ["ocr", "job", id] as const,
   ocrStatus: ["ocr", "status"] as const,
   backups: ["backups"] as const,
@@ -115,6 +116,11 @@ export function useCatalogStatus() {
 
 export function useAiStatus() {
   return useQuery({ queryKey: keys.aiStatus, queryFn: api.aiStatus, refetchInterval: 60_000 });
+}
+
+/** Giọng đọc tự nhiên của máy chủ có sẵn không (máy chủ cũ chưa có API này → coi như không có). */
+export function useTtsStatus() {
+  return useQuery({ queryKey: keys.ttsStatus, queryFn: api.ttsStatus, staleTime: 5 * 60_000, retry: false });
 }
 
 export function useBarcodeStatus() {

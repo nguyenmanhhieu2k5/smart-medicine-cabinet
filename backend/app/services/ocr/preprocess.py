@@ -84,6 +84,34 @@ def denoise(image: np.ndarray) -> np.ndarray:
     return cv2.bilateralFilter(image, d=7, sigmaColor=45, sigmaSpace=45)
 
 
+# ---- Lóa sáng ------------------------------------------------------------- #
+# Đo lóa để NHẮC người dùng chụp lại, không để lọc ảnh: đã thử 6 bộ lọc (CLAHE, san phẳng nền, chuẩn hóa tương phản
+# cục bộ, nén vùng chói, tách lớp mực màu, phóng to vùng chữ) với PP-OCRv6 trên ảnh vỉ giấy bạc có lóa — không bộ lọc
+# nào đọc được nhiều chữ hơn ảnh gốc (chữ dưới chỗ lóa đã mất hẳn), nên không thêm lượt OCR vô ích.
+# Vùng giữa khung (x 15–85%, y 10–90%) — nơi đặt hộp/vỉ thuốc; trùng cách đo của ứng dụng Windows (frameQuality.ts).
+GLARE_REGION = (0.15, 0.85, 0.10, 0.90)
+
+
+def glare_ratio(image: np.ndarray) -> float:
+    """Tỉ lệ điểm ảnh cháy sáng (kênh lớn nhất ≥ 250) mà gần như không màu ở vùng giữa ảnh.
+
+    Đó là phản chiếu của đèn trên giấy bạc vỉ thuốc, màng bóng của hộp hoặc màn hình điện thoại quá sáng.
+    Màu sáng nhưng có màu (vàng, cam) không tính.
+    """
+    h, w = image.shape[:2]
+    x0, x1, y0, y1 = GLARE_REGION
+    region = image[int(h * y0):int(h * y1), int(w * x0):int(w * x1)]
+    if max(region.shape[:2]) > 640:
+        scale = 640 / max(region.shape[:2])
+        region = cv2.resize(region, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    if region.size == 0:
+        return 0.0
+    channels = region.astype(np.int16)
+    top, bottom = channels.max(axis=2), channels.min(axis=2)
+    return float(((top >= 250) & (top - bottom <= 40)).mean())
+
+
+
 def rotate_quarter(image: np.ndarray, turns: int) -> np.ndarray:
     turns %= 4
     if turns == 1:

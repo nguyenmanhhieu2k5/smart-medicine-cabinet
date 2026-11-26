@@ -32,7 +32,12 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "Tủ thuốc thông minh — Quét thuốc",
+      "shortName": "Tủ thuốc",
+      "lang": "vi",
+      "description": "Quét hộp hoặc vỉ thuốc bằng camera để tra cứu thông tin thuốc trong danh mục Cục Quản lý Dược.",
+      "themeColor": "#0066FF"
     },
     "plugins": [
       "expo-router",
@@ -59,7 +64,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Ứng dụng đọc ảnh bạn chọn để nhận diện tên thuốc.",
-          "cameraPermission": false,
+          "cameraPermission": "Ứng dụng dùng camera để chụp hộp hoặc vỉ thuốc và nhận diện tên thuốc.",
           "microphonePermission": false
         }
       ],

@@ -56,12 +56,14 @@ export interface MockState {
   /** Trạng thái AI giả lập: tìm kiếm trên mạng có dùng được không. */
   aiSearch: boolean;
   aiProvider: "tavily" | "auto" | "gemini";
+  /** Giọng đọc tự nhiên của máy chủ có sẵn không (giả lập GET /tts/status). */
+  ttsAvailable: boolean;
   calls: { method: string; path: string; body: unknown }[];
 }
 
 /** Thay `fetch` bằng backend giả tối thiểu; trả về state để từng test chỉnh dữ liệu. */
 export function installMockApi(): MockState {
-  const state: MockState = { alerts: [], cabinet: [], job: null, devices: [], commandStatuses: ["sent", "acknowledged", "applied"], users: [ADMIN_USER], audit: [], barcodes: 0, aiSearch: true, aiProvider: "tavily", calls: [] };
+  const state: MockState = { alerts: [], cabinet: [], job: null, devices: [], commandStatuses: ["sent", "acknowledged", "applied"], users: [ADMIN_USER], audit: [], barcodes: 0, aiSearch: true, aiProvider: "tavily", ttsAvailable: true, calls: [] };
   let commandPolls = 0;
   const command = (status: DeviceCommand["status"]): DeviceCommand => ({
     id: "cmd-1", device_id: "dev-1", action: "buzzer", action_label: "Bật/tắt còi", payload: { on: true, duration_s: 5 }, status,
@@ -96,7 +98,7 @@ export function installMockApi(): MockState {
     if (path === "/alerts") return json({ items: state.alerts, unhandled, open: state.alerts.filter((a) => a.status !== "resolved").length, by_category: { environment: 0, medicine: state.alerts.length, system: 0 } });
     if (path === "/catalog/status") return json({ count: 55005, source_path: "DAV_unique.xlsx", default_source: null, last_import: null, progress: { running: false, stage: "idle", rows_read: 0, rows_total: null, percent: null, message: "", file: null, last_result: null } });
     if (path === "/ai/status") return json({ provider: state.aiProvider, configured: true, models: ["gemini-3.5-flash"], search_available: state.aiSearch, last_error: state.aiSearch ? null : "Gemini chưa cho phép tìm kiếm trên mạng", web_search: { provider: "tavily", configured: true, last_error: null } });
-    if (path.startsWith("/ai/scans/")) return json({
+    if (path.startsWith("/ai/scans/") || path === "/ai/lookup") return json({
       status: "found", kind: "scan", mode: state.aiProvider === "tavily" ? "search" : state.aiSearch ? "web" : "offline",
       model: state.aiProvider === "tavily" ? "tavily" : "gemini-3.5-flash", cached: false, elapsed_ms: 4200,
       result: { found: true, ten_thuoc: "Augmentin 625mg", hoat_chat: "Amoxicillin; Acid clavulanic", ham_luong: "500mg/125mg", dang_bao_che: "Viên nén bao phim", quy_cach: "Hộp 2 vỉ x 7 viên", so_dang_ky: "VN-20169-16", nha_san_xuat: "GSK", nuoc_san_xuat: "Anh", do_tin_cay: "cao", ghi_chu: null },
@@ -104,6 +106,15 @@ export function installMockApi(): MockState {
       catalog_matches: [{ id: 34382, ten_thuoc: "Augmentin 625mg tablets", hoat_chat_chinh: null, ham_luong: "500mg/125mg", ham_luong_source: "hamLuong", dang_bao_che: null, so_dang_ky: "VN-20169-16", ten_cong_ty_san_xuat: null, nuoc_san_xuat: null, dong_goi: null, registration_status: { code: "valid", label: "Số đăng ký còn hiệu lực" }, in_source: true, match_by: "registration" }],
       message: "AI đã tìm thấy thông tin trên mạng.", reason: null, notice: "Thông tin do AI tổng hợp từ Internet, có thể chưa chính xác. Hãy đối chiếu với vỏ hộp và hỏi dược sĩ trước khi dùng thuốc.",
     });
+    if (path === "/tts/status") return json({
+      id: "server:vi_VN-vais1000", name: "Giọng tự nhiên tiếng Việt (Piper · VAIS-1000)", license: "CC BY 4.0 — VAIS-1000 Vietnamese Speech Synthesis Corpus",
+      engine: "sherpa-onnx (Piper)", available: state.ttsAvailable, reason: state.ttsAvailable ? null : "Chưa tải mô hình giọng đọc.",
+    });
+    if (path === "/tts" && method === "POST") {
+      return state.ttsAvailable
+        ? new Response(new Blob([new Uint8Array([82, 73, 70, 70])], { type: "audio/wav" }), { status: 200, headers: { "Content-Type": "audio/wav" } })
+        : json({ detail: "Chưa tải mô hình giọng đọc." }, 503);
+    }
     if (path === "/catalog/barcodes/status") return json({ barcodes: state.barcodes, medicines_with_barcode: state.barcodes ? 4 : 0, catalog_total: 55005, last_import: null });
     if (path === "/catalog/barcodes/import") {
       const dry = (body as { dry_run?: string } | null)?.dry_run !== "false";
@@ -118,6 +129,9 @@ export function installMockApi(): MockState {
     }
     if (path === "/catalog/barcodes/lookup") {
       const code = url.searchParams.get("code") ?? "";
+      if (!/^\d{8,14}$/.test(code)) {
+        return json({ status: "invalid", code, gtin: null, message: "Mã này không phải mã vạch sản phẩm (GTIN/EAN).", medicine: null, link: null, gs1: null });
+      }
       return json(state.barcodes ? {
         status: "found", code, gtin: `0${code}`, message: "", link: { source: "excel", match_method: "registration", unit: "Hộp", import_id: 1 },
         medicine: { id: 34382, ten_thuoc: "Augmentin 625mg tablets", hoat_chat_chinh: null, ham_luong: "500mg/125mg", ham_luong_source: "hamLuong", dang_bao_che: null, so_dang_ky: "VN-20169-16", ten_cong_ty_san_xuat: null, nuoc_san_xuat: null, dong_goi: null, registration_status: { code: "valid", label: "Số đăng ký còn hiệu lực" }, in_source: true },

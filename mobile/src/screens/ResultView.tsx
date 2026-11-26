@@ -1,13 +1,14 @@
 import { router } from "expo-router";
-import { ArrowRight, BarChart3, Check, ChevronRight, CircleAlert, Globe, ScanLine, Target } from "lucide-react-native";
+import { ArrowRight, BarChart3, Check, ChevronRight, CircleAlert, Globe, QrCode, ScanBarcode as BarcodeIcon, ScanLine, SunDim, Target } from "lucide-react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import { api, type Candidate, type ScanJob } from "@/api";
+import { api, type Candidate, type ScanBarcode, type ScanJob } from "@/api";
 import { ScanThumbnail } from "@/components/ScanThumbnail";
 import { Screen, ScreenHeader } from "@/components/layout";
 import { UnrecognizedView } from "@/components/states";
 import { Button, Chip, type as T } from "@/components/ui";
 import { pickFromLibrary } from "@/scan/image";
+import { submitOrPromptLogin } from "@/scan/startScan";
 import { colors, font, radius, shadow } from "@/theme";
 import { candidateBadge } from "@/utils/format";
 
@@ -16,6 +17,17 @@ const EMPTY_TEXT: Record<string, { title: string; message: string }> = {
   no_match: { title: "Không tìm thấy thuốc phù hợp", message: "Đã đọc được chữ trên ảnh nhưng không khớp thuốc nào trong cơ sở dữ liệu. Hãy chụp rõ tên thuốc hoặc số đăng ký." },
   no_catalog: { title: "Máy chủ chưa có danh mục thuốc", message: "Quản trị viên cần nhập danh mục thuốc (DAV_unique.xlsx) trên ứng dụng Windows." },
 };
+
+/** Cùng ngưỡng với ứng dụng Windows: ≥ 3% vùng giữa ảnh cháy trắng. */
+const GLARE_TIP_PERCENT = 3;
+const GLARE_TIP = "Ảnh bị lóa sáng ở vùng giữa nên chữ nằm dưới chỗ lóa bị mất. Tắt đèn flash, nghiêng nhẹ hộp/vỉ thuốc để tránh đèn chiếu thẳng rồi chụp lại.";
+
+/** Lời nhắc chụp lại khi ảnh lóa mà kết quả chưa chắc chắn (giấy bạc vỉ thuốc, hộp bóng, đèn flash). */
+export function glareTip(job: ScanJob): string | null {
+  const result = job.result;
+  if (!result || (result.glare ?? 0) < GLARE_TIP_PERCENT || result.match.status === "confident") return null;
+  return GLARE_TIP;
+}
 
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -61,17 +73,27 @@ export function ResultView({ job, historyId, initialSelected, onBack }: { job: S
   const compact = width < 380;
 
   const rescan = () => router.navigate("/scan");
-  // Người dùng xác nhận không có thuốc đúng → máy chủ tìm tên thuốc của lượt quét này trên mạng (Tavily, hoặc Gemini).
-  const askAi = () => router.push({ pathname: "/ai-lookup", params: { kind: "scan", jobId: job.id } });
+  const codes = job.result?.barcodes ?? [];
+  const unknownCode = codeToLookUp(codes);
+  // Người dùng xác nhận không có thuốc đúng → máy chủ tìm trên mạng: theo đúng mã vạch/QR trên ảnh nếu dữ liệu chưa có
+  // mã đó, không thì theo tên thuốc in trên hộp (Tavily, hoặc Gemini).
+  const askAi = () => router.push({
+    pathname: "/ai-lookup",
+    params: unknownCode ? { kind: unknownCode.kind, code: unknownCode.code } : { kind: "scan", jobId: job.id },
+  });
   const pickOther = async () => {
     const image = await pickFromLibrary().catch(() => null);
     if (!image) return;
-    const next = await api.submitScan(image, "upload");
-    router.push({ pathname: "/scan/processing/[jobId]", params: { jobId: next.id } });
+    const next = await submitOrPromptLogin(image, "upload"); // khách hết lượt quét thử → đăng nhập
+    if (next) router.push({ pathname: "/scan/processing/[jobId]", params: { jobId: next.id } });
   };
 
+  const tip = glareTip(job);
   if (candidates.length === 0) {
-    const text = EMPTY_TEXT[match?.status ?? "no_text"] ?? EMPTY_TEXT.no_text;
+    const empty = EMPTY_TEXT[match?.status ?? "no_text"] ?? EMPTY_TEXT.no_text;
+    const text = unknownCode
+      ? { title: "Đã đọc được mã nhưng chưa có dữ liệu", message: `${unknownCode.label} chưa có trong dữ liệu. Bấm “Tìm trên mạng” để tra đúng mã này.` }
+      : { title: empty.title, message: tip ?? empty.message };
     return (
       <Screen>
         <ScreenHeader title="Kết quả nhận diện" onBack={onBack} />
@@ -102,6 +124,27 @@ export function ResultView({ job, historyId, initialSelected, onBack }: { job: S
           <Text style={[T.small, { fontSize: 14, marginTop: 2 }]}>Hãy chọn đúng thuốc để xem chi tiết</Text>
         </View>
       </View>
+      {tip ? (
+        <View style={styles.glareTip} testID="glare-tip" accessibilityRole="alert">
+          <SunDim size={18} color={colors.warningInk} strokeWidth={2.2} />
+          <Text style={[T.small, { flex: 1, fontSize: 13.5, color: colors.warningInk }]}>{tip}</Text>
+        </View>
+      ) : null}
+      {codes.length > 0 && (
+        <View style={{ gap: 8, marginTop: 12 }} testID="scan-barcodes">
+          {codes.map((code) => {
+            const Icon = /QR|Matrix/.test(code.format) ? QrCode : BarcodeIcon;
+            return (
+              <View key={code.text} style={styles.codeRow}>
+                <Icon size={18} color={colors.primary} strokeWidth={2} />
+                <Text style={[T.small, { fontSize: 13 }]}>{code.format}</Text>
+                <Text style={[T.label, { flex: 1, fontSize: 14 }]} numberOfLines={1}>{code.kind === "gtin" ? code.display : code.text}</Text>
+                <Text style={[T.small, { fontSize: 12.5, color: code.status === "found" ? colors.success : colors.muted }]}>{CODE_STATUS[code.status]}</Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
       <View style={{ gap: 12, marginTop: 16 }} accessibilityRole="radiogroup">
         {candidates.map((candidate, index) => (
           <CandidateCard key={candidate.medicine.id} candidate={candidate} index={index} selected={index === selected} jobId={job.id}
@@ -113,7 +156,9 @@ export function ResultView({ job, historyId, initialSelected, onBack }: { job: S
         <View style={styles.aiIcon}><Globe size={22} color={colors.primary} strokeWidth={2} /></View>
         <View style={{ flex: 1 }}>
           <Text style={[T.label, { fontSize: 15.5 }]}>Không có thuốc đúng?</Text>
-          <Text style={[T.small, { fontSize: 13.5, marginTop: 1 }]}>Tìm tên thuốc trên hộp vừa chụp trên mạng</Text>
+          <Text style={[T.small, { fontSize: 13.5, marginTop: 1 }]}>
+            {unknownCode ? `Tìm ${unknownCode.label.toLowerCase()} trên mạng` : "Tìm tên thuốc trên hộp vừa chụp trên mạng"}
+          </Text>
         </View>
         <ChevronRight size={20} color={colors.muted} />
       </Pressable>
@@ -126,7 +171,31 @@ export function ResultView({ job, historyId, initialSelected, onBack }: { job: S
   );
 }
 
+const CODE_STATUS: Record<ScanBarcode["status"], string> = {
+  found: "Khớp dữ liệu",
+  not_found: "Chưa có dữ liệu",
+  internal: "Mã nội bộ cửa hàng",
+  text: "Nội dung mã",
+};
+
+/** Mã trên ảnh mà dữ liệu chưa có → tra đúng mã đó trên mạng. Đã có mã khớp thì không cần. */
+export function codeToLookUp(codes: ScanBarcode[]): { kind: "barcode" | "qr"; code: string; label: string } | null {
+  if (codes.some((c) => c.status === "found")) return null;
+  const gtin = codes.find((c) => c.status === "not_found");
+  if (gtin) return { kind: "barcode", code: gtin.display, label: `Mã vạch ${gtin.display}` };
+  const qr = codes.find((c) => c.status === "text");
+  return qr ? { kind: "qr", code: qr.text, label: "Mã QR" } : null;
+}
+
 const styles = StyleSheet.create({
+  codeRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.card,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+  },
+  glareTip: {
+    flexDirection: "row", alignItems: "flex-start", gap: 10, marginTop: 12, paddingHorizontal: 14, paddingVertical: 12,
+    borderRadius: radius.card, backgroundColor: colors.warningSoft,
+  },
   banner: { flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: colors.primarySoft, borderRadius: radius.card, padding: 16 },
   aiRow: {
     flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, padding: 14, borderRadius: radius.card,

@@ -7,7 +7,8 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
-import { api, ApiError, type BarcodeResult } from "@/api";
+import { api, ApiError, isGuestLimit, type BarcodeResult } from "@/api";
+import { promptLoginForMoreScans } from "./startScan";
 
 /** EAN-13/8, UPC trên vỏ hộp; DataMatrix (GS1, có hạn dùng + số lô); QR (GS1 Digital Link); Code 128 (GS1-128). */
 export const BARCODE_TYPES: BarcodeType[] = ["ean13", "ean8", "upc_a", "upc_e", "datamatrix", "qr", "code128", "itf14"];
@@ -82,7 +83,8 @@ export function useBarcodeScanner({ enabled, vibrate }: { enabled: boolean; vibr
       }
       // Mã nội bộ của cửa hàng (dải 2xx) và mã vạch 1D lỗi: bỏ qua, không làm phiền người dùng.
     } catch (e) {
-      if (e instanceof ApiError) setNotice({ code: data, message: e.message });
+      if (isGuestLimit(e)) promptLoginForMoreScans(); // trang web: khách hết lượt quét thử
+      else if (e instanceof ApiError) setNotice({ code: data, message: e.message });
     } finally {
       inFlight.current = false;
       setLooking(false);

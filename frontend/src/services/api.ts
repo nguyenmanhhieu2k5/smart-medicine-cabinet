@@ -1,5 +1,5 @@
 import type {
-  ActionSpec, AdminScan, AdminUser, AiLookupResult, AiStatus, AlertList, AppSettings, AuditEntry, BackupInfo, BackupList, BarcodeImportReport, BarcodeLookup,
+  ActionSpec, AdminScan, AdminUser, AiLookupResult, AiStatus, TtsStatus, AlertList, AppSettings, AuditEntry, BackupInfo, BackupList, BarcodeImportReport, BarcodeLookup,
   BarcodeStatus, CabinetInput, CabinetItem,
   CabinetList, CatalogStatus, DeviceCommand, DeviceConnection, DeviceInfo, DeviceList, DeviceStatus, DeviceTokenResult, Health,
   HistoryEvent, HistoryList, MedicineDetail, OcrJob, OcrStatus, PendingNotifications, Profile, Reminder, ReminderInput, Schedule,
@@ -202,6 +202,22 @@ async function request<T>(method: string, path: string, options: RequestOptions 
   return (await response.json()) as T;
 }
 
+/** Giọng đọc tự nhiên của máy chủ: trả file WAV để phát. */
+async function speechAudio(text: string, speed: number): Promise<Blob> {
+  const response = await send("POST", "/tts", { body: { text, speed } });
+  if (!response.ok) {
+    let message = "Máy chủ không đọc được đoạn này.";
+    try {
+      const data = await response.json();
+      if (typeof data.detail === "string") message = data.detail;
+    } catch {
+      /* giữ thông báo mặc định */
+    }
+    throw new ApiError(message, response.status);
+  }
+  return response.blob();
+}
+
 async function download(path: string, params?: Record<string, string>): Promise<{ blob: Blob; filename: string }> {
   const response = await send("GET", path, { params });
   if (!response.ok) throw new ApiError("Không tải được file.", response.status);
@@ -252,6 +268,8 @@ export const api = {
   barcodeDelete: (gtin: string) => request<{ deleted: boolean; gtin: string }>("DELETE", `/catalog/barcodes/${encodeURIComponent(gtin)}`),
   // AI tra cứu trên mạng (máy chủ gọi Gemini; ứng dụng Windows không giữ khóa AI)
   aiStatus: () => request<AiStatus>("GET", "/ai/status"),
+  ttsStatus: () => request<TtsStatus>("GET", "/tts/status"),
+  ttsAudio: (text: string, speed = 1) => speechAudio(text, speed),
   aiScan: (jobId: string) => request<AiLookupResult>("POST", `/ai/scans/${jobId}`),
   aiLookup: (kind: "barcode" | "qr", code: string) => request<AiLookupResult>("POST", "/ai/lookup", { body: { kind, code } }),
 

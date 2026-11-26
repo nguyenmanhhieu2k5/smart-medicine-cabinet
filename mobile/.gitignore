@@ -11,3 +11,6 @@ ios/
 *.mobileprovision
 expo-env.d.ts
 visual-check/output/
+
+# Bộ đọc mã vạch WebAssembly cho trang web — chép từ node_modules lúc build (scripts/copy-zxing-wasm.mjs)
+public/zxing_reader.wasm

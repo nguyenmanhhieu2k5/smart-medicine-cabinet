@@ -19,6 +19,8 @@ class OcrJobRecord(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"))
+    # Lượt quét của khách trên trang web (chưa đăng nhập): HMAC mã khách — chỉ chính khách đó xem được.
+    guest_key: Mapped[str | None] = mapped_column(String(64))
     channel: Mapped[str] = mapped_column(String(8))  # admin | public
     source: Mapped[str] = mapped_column(String(16))  # camera | upload
     status: Mapped[str] = mapped_column(String(16), default="queued", server_default="queued")
@@ -104,3 +106,21 @@ class ScanHistory(Base):
         CheckConstraint(f"status IN {SCAN_STATUSES!r}", name="ck_scan_history_status"),
         Index("ix_scan_history_user_created", "user_id", "created_at"),
     )
+
+
+class GuestUsage(Base):
+    """Số lượt quét thử của một trình duyệt KHÁCH trên trang web (chưa đăng nhập).
+
+    Khóa là HMAC của mã khách ngẫu nhiên trình duyệt tự tạo — không lưu IP hay thông tin cá nhân. ``codes``: các mã
+    vạch/QR khách đã quét gần đây (quét lại cùng mã không tính thêm lượt; chỉ được tra trên mạng mã mình đã quét).
+    """
+
+    __tablename__ = "guest_usage"
+
+    guest_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scans_used: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    codes: Mapped[list] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(LocalDateTime)
+    last_used_at: Mapped[datetime] = mapped_column(LocalDateTime)
+
+    __table_args__ = (CheckConstraint("scans_used >= 0", name="ck_guest_usage_scans"),)

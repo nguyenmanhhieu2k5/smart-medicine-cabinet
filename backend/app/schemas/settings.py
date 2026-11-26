@@ -44,7 +44,8 @@ class AppSettings(BaseModel):
     ocr_device: OcrDeviceName = "auto"
     ocr_det_limit_side_len: int = Field(960, ge=320, le=2560)
     ocr_auto_enhance: bool = True
-    ocr_use_textline_orientation: bool = False
+    # Xoay từng dòng chữ in dọc/lộn ngược (vỉ thuốc hay in như vậy). Thiếu mô hình thì engine tự tắt, không lỗi.
+    ocr_use_textline_orientation: bool = True
     ocr_cpu_threads: int = Field(0, ge=0, le=64)  # 0 = tự chọn
     ocr_save_scan_images: bool = False
 

@@ -20,8 +20,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import __version__
 from app.api import (
-    admin_auth, admin_misc, admin_users, ai, alerts, backup, cabinet, catalog, device, health, history, medicines,
-    notifications, ocr, profile, public, reminders,
+    admin_auth, admin_misc, admin_users, ai, alerts, backup, cabinet, catalog, device, guest, health, history, medicines,
+    notifications, ocr, profile, public, reminders, tts,
 )
 from app.api import settings as settings_api
 from app.auth.deps import require, require_admin_channel, require_by_method
@@ -30,6 +30,7 @@ from app.auth.service import AuthError
 from app.core.config import Settings, load_settings
 from app.core.context import AppContext
 from app.database.session import DatabaseError
+from app.web import mount_web
 
 log = logging.getLogger("smc")
 
@@ -187,6 +188,7 @@ def create_app(
             (settings_api.router, [Depends(require("settings:manage"))]),
             (device.router, []),
             (profile.router, []),
+            (tts.router, []),
             (backup.router, []),
             (admin_users.router, []),
             (admin_misc.router, []),
@@ -195,4 +197,7 @@ def create_app(
             app.include_router(router, prefix="/api", dependencies=admin_only + deps)
     else:
         app.include_router(public.router)
+        app.include_router(guest.router)
+        if settings.web_dir:
+            mount_web(app, settings.web_dir)  # đăng ký SAU CÙNG: không che route API nào
     return app

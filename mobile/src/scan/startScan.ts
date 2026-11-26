@@ -1,7 +1,25 @@
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { Platform } from "react-native";
-import { api, ApiError, type PickedImage } from "@/api";
+import { api, ApiError, isGuestLimit, type PickedImage, type ScanJob } from "@/api";
+
+/** Trang web: khách dùng hết lượt quét thử → màn hình Đăng nhập kèm lời nhắc (đăng nhập xong quét tiếp như ứng dụng). */
+export function promptLoginForMoreScans(): void {
+  router.push({ pathname: "/login", params: { reason: "guest_limit" } });
+}
+
+/** Gửi ảnh nhận diện; khách hết lượt thì chuyển sang đăng nhập và trả về null. */
+export async function submitOrPromptLogin(image: PickedImage, source: "camera" | "upload"): Promise<ScanJob | null> {
+  try {
+    return await api.submitScan(image, source);
+  } catch (error) {
+    if (isGuestLimit(error)) {
+      promptLoginForMoreScans();
+      return null;
+    }
+    throw error;
+  }
+}
 
 /**
  * Gửi ảnh lên máy chủ rồi chuyển sang màn “Đang xử lý ảnh”. Kết quả KHÔNG tự thêm vào tủ thuốc —
@@ -9,8 +27,8 @@ import { api, ApiError, type PickedImage } from "@/api";
  */
 export async function startScan(image: PickedImage, source: "camera" | "upload", options: { vibrate?: boolean } = {}): Promise<void> {
   if (options.vibrate !== false && Platform.OS !== "web") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-  const job = await api.submitScan(image, source);
-  router.push({ pathname: "/scan/processing/[jobId]", params: { jobId: job.id } });
+  const job = await submitOrPromptLogin(image, source);
+  if (job) router.push({ pathname: "/scan/processing/[jobId]", params: { jobId: job.id } });
 }
 
 export function scanErrorMessage(error: unknown): string {

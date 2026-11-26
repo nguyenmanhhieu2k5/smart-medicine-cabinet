@@ -18,5 +18,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     ...(config.extra ?? {}),
     apiUrl: resolveApiUrl(config.extra, process.env.SMC_API_URL),
+    // Trang web dùng máy chủ CÙNG địa chỉ với trang; chỉ khi chạy thử `npm run web` (cổng 8081) mới cần chỉ định.
+    webApiUrl: (process.env.SMC_WEB_API_URL ?? "").trim(),
   },
 });

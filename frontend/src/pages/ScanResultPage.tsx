@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import {
-  Check, ChevronDown, CircleCheck, CircleHelp, CircleMinus, CircleX, Database, Eye, RefreshCw, ScanSearch, Search, TextSearch, TriangleAlert,
+  Check, ChevronDown, CircleCheck, CircleHelp, CircleMinus, CircleX, Database, Eye, QrCode, RefreshCw, ScanBarcode as BarcodeIcon, ScanSearch,
+  Search, TextSearch, TriangleAlert,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -12,11 +13,43 @@ import { InfoRows, MatchLevelChip, MedicineAvatar, Note } from "@/components/Med
 import { EmptyState, ErrorState } from "@/components/States";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { useT } from "@/i18n";
+import { GLARE_HINT_RATIO } from "@/scan/frameQuality";
 import { assetUrl } from "@/services/api";
 import { errorMessage, useOcrJob } from "@/services/queries";
 import { usePageHeader } from "@/stores/page";
 import { useUiStore } from "@/stores/ui";
-import type { ComponentStatus, MatchCandidate, OcrJob } from "@/types/api";
+import type { ComponentStatus, MatchCandidate, OcrJob, ScanBarcode } from "@/types/api";
+
+const BARCODE_TONE = { found: "success", not_found: "warning", internal: "neutral", text: "neutral" } as const;
+
+/** Mã vạch / mã QR máy chủ đọc được trên ảnh (cùng lúc với OCR). */
+function BarcodeStrip({ codes }: { codes: ScanBarcode[] }) {
+  const t = useT();
+  const label = (c: ScanBarcode) => ({
+    found: c.match_by === "registration" ? t("Số đăng ký trong mã khớp danh mục") : t("Khớp dữ liệu mã vạch"),
+    not_found: t("Chưa có dữ liệu mã vạch"),
+    internal: t("Mã nội bộ cửa hàng"),
+    text: t("Nội dung mã"),
+  })[c.status];
+  return (
+    <div className="mb-5 space-y-2" data-testid="scan-barcodes">
+      {codes.map((c) => {
+        const Icon = /QR|Matrix/.test(c.format) ? QrCode : BarcodeIcon;
+        const [y, m, d] = (c.expiry ?? "").split("-");
+        return (
+          <div key={c.text} className="flex flex-wrap items-center gap-2 rounded-2xl bg-tile px-4 py-3">
+            <Icon size={18} className="shrink-0 text-primary" />
+            <span className="text-[12.5px] font-semibold text-muted">{c.format}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[14px] text-navy" title={c.text}>{c.kind === "gtin" ? c.display : c.text}</span>
+            <StatusIndicator size="sm" tone={BARCODE_TONE[c.status]}>{label(c)}</StatusIndicator>
+            {c.expiry && <StatusIndicator size="sm" tone="info">{t("HSD")}: {d}/{m}/{y}</StatusIndicator>}
+            {c.lot && <StatusIndicator size="sm">{t("Lô")}: {c.lot}</StatusIndicator>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const STATUS_ICON: Record<ComponentStatus, { icon: typeof Check; className: string }> = {
   match: { icon: CircleCheck, className: "text-success" },
@@ -25,6 +58,12 @@ const STATUS_ICON: Record<ComponentStatus, { icon: typeof Check; className: stri
   not_observed: { icon: CircleHelp, className: "text-muted/70" },
   no_data: { icon: CircleHelp, className: "text-muted/70" },
 };
+
+/** Ảnh lóa ≥ 3% vùng giữa (cùng ngưỡng với nhắc trực tiếp trên camera) mà kết quả chưa chắc chắn → nhắc chụp lại. */
+function glareTip(job: OcrJob | undefined): boolean {
+  const result = job?.result;
+  return !!result && (result.image.glare ?? 0) >= GLARE_HINT_RATIO * 100 && result.match.status !== "confident";
+}
 
 function ScannedImage({ job, processing }: { job: OcrJob | undefined; processing: boolean }) {
   const t = useT();
@@ -70,6 +109,13 @@ function ScannedImage({ job, processing }: { job: OcrJob | undefined; processing
               <TextSearch size={15} /> {t("Văn bản OCR")} <ChevronDown size={14} className={clsx("transition-transform", showText && "rotate-180")} />
             </button>
           </div>
+          {glareTip(job) && (
+            <div className="mt-3" data-testid="glare-tip">
+              <Note tone="warning">
+                {t("Ảnh bị lóa sáng ở vùng giữa nên chữ nằm dưới chỗ lóa bị mất. Nghiêng nhẹ vỉ/hộp thuốc hoặc tránh đèn chiếu thẳng (tắt đèn flash) rồi chụp lại.")}
+              </Note>
+            </div>
+          )}
           {showText && (
             <div className="scroll-area mt-3 max-h-56 overflow-y-auto rounded-2xl bg-tile p-4">
               {ocr.lines.length === 0 ? (
@@ -205,6 +251,14 @@ export function ScanResultPage() {
 
   const selected = candidates.find((c) => c.medicine.id === selectedId) ?? null;
   const shown = selected ?? candidates[0] ?? null;
+  const codes = job?.result?.barcodes ?? [];
+  // Ảnh có mã nhưng dữ liệu chưa có → "Tìm trên mạng" theo đúng mã đó (chính xác hơn tìm theo chữ trên hộp).
+  const unknownGtin = codes.find((c) => c.status === "not_found");
+  const unknownQr = codes.find((c) => c.status === "text");
+  const lookupCode = codes.some((c) => c.status === "found") ? undefined
+    : unknownGtin ? { kind: "barcode" as const, value: unknownGtin.display, label: t("Mã vạch {code}", { code: unknownGtin.display }) }
+    : unknownQr ? { kind: "qr" as const, value: unknownQr.text, label: t("Mã QR") }
+    : undefined;
   const rescan = () => navigate("/scan");
   const manual = () => openSearch(match?.evidence.search_hint ?? "", jobId);
 
@@ -246,7 +300,9 @@ export function ScanResultPage() {
                 <PrimaryButton variant="secondary" icon={Search} onClick={manual}>{t("Tìm thủ công")}</PrimaryButton>
               </div>
             </>
-          ) : match?.status === "no_catalog" ? (
+          ) : codes.length > 0 && match?.status !== "no_catalog" && <BarcodeStrip codes={codes} />}
+
+          {processing || job.status === "error" ? null : match?.status === "no_catalog" ? (
             <EmptyState icon={Database} title={t("Chưa có danh mục thuốc")} description={match.message}
               action={<PrimaryButton onClick={() => navigate("/settings")}>{t("Mở Cài đặt")}</PrimaryButton>} />
           ) : !shown ? (
@@ -318,7 +374,9 @@ export function ScanResultPage() {
       )}
 
       {/* Người dùng xác nhận không có kết quả đúng (hoặc không nhận diện được) → tìm trên mạng bằng AI */}
-      {!processing && job.status === "done" && match?.status !== "no_catalog" && <AiLookupPanel jobId={jobId} />}
+      {!processing && job.status === "done" && match?.status !== "no_catalog" && (
+        <AiLookupPanel key={lookupCode?.value ?? jobId} jobId={jobId} code={lookupCode} />
+      )}
 
       <CabinetItemModal request={saving} onClose={() => setSaving(null)} onSaved={(item) => navigate(`/cabinet/${item.id}`)} />
     </div>

@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react-native";
 import { router } from "expo-router";
 import { api } from "@/api";
-import type { Candidate, ScanJob } from "@/api/types";
-import { ResultView } from "./ResultView";
+import type { Candidate, ScanBarcode, ScanJob } from "@/api/types";
+import { codeToLookUp, ResultView } from "./ResultView";
 
 jest.mock("react-native-safe-area-context", () => {
   const { View } = jest.requireActual("react-native");
@@ -54,6 +54,29 @@ describe("Kết quả nhận diện", () => {
   });
 });
 
+describe("Ảnh bị lóa sáng (giấy bạc vỉ thuốc, hộp bóng, đèn flash)", () => {
+  const withGlare = (j: ScanJob, glare: number | null): ScanJob => ({ ...j, result: j.result && { ...j.result, glare } });
+
+  it("lóa mà chưa chắc chắn → nhắc tắt đèn flash, nghiêng vỉ/hộp rồi chụp lại", async () => {
+    await render(<ResultView job={withGlare(job("uncertain", [candidate(20839, "Desloderma 5", "medium")]), 6.5)} />);
+    expect(screen.getByTestId("glare-tip")).toBeTruthy();
+    expect(screen.getByText(/Tắt đèn flash, nghiêng nhẹ hộp\/vỉ thuốc/)).toBeTruthy();
+  });
+
+  it("không đọc được chữ vì lóa → lời giải thích nói rõ là do lóa", async () => {
+    await render(<ResultView job={withGlare(job("no_text", []), 12)} />);
+    expect(screen.getByText(/Ảnh bị lóa sáng ở vùng giữa/)).toBeTruthy();
+  });
+
+  it("ít lóa, đã chắc chắn, hoặc máy chủ cũ không báo lóa → không nhắc", async () => {
+    for (const j of [withGlare(job("uncertain", [candidate(1, "A", "medium")]), 1.2), withGlare(job("confident", [candidate(1, "A", "high")]), 20), job("uncertain", [candidate(1, "A", "medium")])]) {
+      const view = await render(<ResultView job={j} />);
+      expect(screen.queryByTestId("glare-tip")).toBeNull();
+      await view.unmount();
+    }
+  });
+});
+
 describe("Không có thuốc đúng → tìm trên mạng (máy chủ mặc định dùng Tavily, không AI)", () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -70,5 +93,44 @@ describe("Không có thuốc đúng → tìm trên mạng (máy chủ mặc đ�
     expect(screen.getByText("Tìm trên mạng")).toBeTruthy();
     await fireEvent.press(screen.getByTestId("ai-search"));
     expect(router.push).toHaveBeenCalledWith({ pathname: "/ai-lookup", params: { kind: "scan", jobId: "0b8f2f7e-1f0c-4f0e-9a51-2a4b8c6d7e8f" } });
+  });
+});
+
+describe("Ảnh có mã vạch / mã QR (máy chủ đọc mã trên ảnh, kể cả ảnh chọn từ thư viện)", () => {
+  beforeEach(() => jest.clearAllMocks());
+  const code = (status: ScanBarcode["status"], extra: Partial<ScanBarcode> = {}): ScanBarcode => ({
+    format: "EAN-13", text: "8935206010121", kind: "gtin", display: "8935206010121", status,
+    medicine_id: status === "found" ? 1 : null, match_by: status === "found" ? "barcode" : null, expiry: null, lot: null, ...extra,
+  });
+  const withCodes = (base: ScanJob, codes: ScanBarcode[]): ScanJob => ({ ...base, result: { ...base.result!, barcodes: codes } });
+
+  it("mã khớp dữ liệu: hiện mã, nút “Không có thuốc đúng?” vẫn tìm theo chữ trên hộp", async () => {
+    await render(<ResultView job={withCodes(job("confident", [candidate(1, "Augmentin 625mg", "high")]), [code("found")])} historyId={null} />);
+    expect(screen.getByTestId("scan-barcodes")).toBeTruthy();
+    expect(screen.getByText("Khớp dữ liệu")).toBeTruthy();
+    await fireEvent.press(screen.getByTestId("ai-not-listed"));
+    expect(router.push).toHaveBeenCalledWith({ pathname: "/ai-lookup", params: { kind: "scan", jobId: "0b8f2f7e-1f0c-4f0e-9a51-2a4b8c6d7e8f" } });
+  });
+
+  it("mã chưa có dữ liệu: tìm trên mạng theo đúng mã đó", async () => {
+    await render(<ResultView job={withCodes(job("uncertain", [candidate(2, "Augmentin 1g", "medium")]), [code("not_found")])} historyId={null} />);
+    expect(screen.getByText("Chưa có dữ liệu")).toBeTruthy();
+    expect(screen.getByText("Tìm mã vạch 8935206010121 trên mạng")).toBeTruthy();
+    await fireEvent.press(screen.getByTestId("ai-not-listed"));
+    expect(router.push).toHaveBeenCalledWith({ pathname: "/ai-lookup", params: { kind: "barcode", code: "8935206010121" } });
+  });
+
+  it("chỉ có mã (không đọc được chữ) và chưa có dữ liệu → báo rõ, nút Tìm trên mạng tra mã", async () => {
+    await render(<ResultView job={withCodes(job("no_text", []), [code("not_found")])} />);
+    expect(screen.getByText("Đã đọc được mã nhưng chưa có dữ liệu")).toBeTruthy();
+    await fireEvent.press(screen.getByTestId("ai-search"));
+    expect(router.push).toHaveBeenCalledWith({ pathname: "/ai-lookup", params: { kind: "barcode", code: "8935206010121" } });
+  });
+
+  it("mã QR có nội dung lạ → tra nội dung QR; mã nội bộ cửa hàng thì không tra", () => {
+    expect(codeToLookUp([code("text", { format: "QR Code", kind: "invalid", text: "https://hang.example/sp/1", display: "https://hang.example/sp/1" })]))
+      .toEqual({ kind: "qr", code: "https://hang.example/sp/1", label: "Mã QR" });
+    expect(codeToLookUp([code("internal", { kind: "internal" })])).toBeNull();
+    expect(codeToLookUp([])).toBeNull();
   });
 });

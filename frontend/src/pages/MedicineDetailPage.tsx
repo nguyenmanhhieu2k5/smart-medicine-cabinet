@@ -11,7 +11,7 @@ import { StatusIndicator, type Tone } from "@/components/StatusIndicator";
 import { useT } from "@/i18n";
 import { assetUrl } from "@/services/api";
 import { formatDate } from "@/services/format";
-import { errorMessage, useCabinetItem, useCabinetMutations, useMedicine, useOcrJob, useSettings } from "@/services/queries";
+import { errorMessage, useCabinetItem, useCabinetMutations, useMedicine, useOcrJob, useSettings, useTtsStatus } from "@/services/queries";
 import { buildSpeech, speak, spokenDate, stopSpeaking, ttsSupported } from "@/services/tts";
 import { usePageHeader } from "@/stores/page";
 import { toast } from "@/stores/toast";
@@ -24,20 +24,22 @@ function registrationTone(code: MedicineDetail["registration_status"]["code"]): 
 function useSpeech(text: string) {
   const t = useT();
   const settings = useSettings().data?.settings;
+  const serverVoice = useTtsStatus().data?.available === true;
   const [speaking, setSpeaking] = useState(false);
   const [noVoice, setNoVoice] = useState(false);
   useEffect(() => () => stopSpeaking(), []);
-  const toggle = () => {
+  const toggle = async () => {
     if (speaking) {
       stopSpeaking();
       setSpeaking(false);
       return;
     }
-    const result = speak(text, { voiceUri: settings?.tts_voice, rate: settings?.tts_rate, onEnd: () => setSpeaking(false) });
+    setSpeaking(true); // giọng máy chủ cần ~0,1–0,5 giây để tạo âm thanh — hiện nút Dừng ngay
+    const result = await speak(text, { voiceUri: settings?.tts_voice, rate: settings?.tts_rate, serverAvailable: serverVoice, onEnd: () => setSpeaking(false) });
     if (result.ok) {
-      setSpeaking(true);
       setNoVoice(false);
     } else {
+      setSpeaking(false);
       setNoVoice(true);
       toast.warning(
         result.reason === "unsupported" ? t("Thiết bị không hỗ trợ đọc văn bản") : t("Chưa có giọng đọc tiếng Việt"),
@@ -45,7 +47,7 @@ function useSpeech(text: string) {
       );
     }
   };
-  return { speaking, noVoice, toggle, enabled: settings?.tts_enabled !== false && ttsSupported() };
+  return { speaking, noVoice, toggle, enabled: settings?.tts_enabled !== false && (serverVoice || ttsSupported()) };
 }
 
 /** Thông tin đăng ký lưu hành lấy nguyên từ danh mục Excel. */

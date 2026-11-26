@@ -1,10 +1,12 @@
 import clsx from "clsx";
-import { Camera, CameraOff, Image as ImageIcon, Keyboard, LoaderCircle, Power, Video } from "lucide-react";
+import { Camera, CameraOff, Image as ImageIcon, Keyboard, LoaderCircle, Power, QrCode, SunDim, Video } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Select } from "@/components/Form";
 import { useCamera } from "@/hooks/useCamera";
 import { useT } from "@/i18n";
+import { pickCode, shouldHandle, useLiveCodeScan, type DetectedCode } from "@/scan/codeReader";
+import { useGlareHint } from "@/scan/frameQuality";
 import { api } from "@/services/api";
 import { errorMessage, useSettings, useUpdateSettings } from "@/services/queries";
 import { toast } from "@/stores/toast";
@@ -81,6 +83,16 @@ export function ScanStage({ autoStart = false, previewClassName, caption }: Scan
     await submit(shot.blob, "camera", shot.crop);
   };
 
+  // Quét mã trực tiếp: camera thấy mã vạch / mã QR → tự mở kết quả, không cần bấm chụp.
+  const seenCodes = useRef(new Map<string, number>());
+  const onCodes = useCallback((codes: DetectedCode[]) => {
+    const code = pickCode(codes);
+    if (!code || busy || !shouldHandle(code.text, Date.now(), seenCodes.current)) return;
+    navigate(`/scan/code?${new URLSearchParams({ code: code.text, format: code.format })}`);
+  }, [busy, navigate]);
+  useLiveCodeScan(camera.videoRef, camera.status === "active" && !busy, onCodes);
+  const glare = useGlareHint(camera.videoRef, camera.status === "active" && !busy);
+
   const onFile = (file: File | undefined) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
@@ -141,6 +153,18 @@ export function ScanStage({ autoStart = false, previewClassName, caption }: Scan
           <span className="absolute left-5 top-5 z-10 inline-flex max-w-[60%] items-center gap-2 truncate rounded-full bg-[#111b39]/55 px-3.5 py-2 text-[12.5px] font-medium text-white backdrop-blur">
             <span className="size-2 rounded-full bg-[#3ddc97]" />
             {`${t("Camera trực tiếp")}${currentLabel ? ` · ${currentLabel}` : ""}`}
+          </span>
+        )}
+        {active && !busy && glare && (
+          <span role="status" className="absolute bottom-4 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-[#7a4b00]/80 px-3.5 py-2 text-[12.5px] font-semibold text-white backdrop-blur" data-testid="glare-hint">
+            <SunDim size={15} />
+            {t("Bị lóa sáng — nghiêng nhẹ vỉ/hộp thuốc hoặc tránh đèn chiếu thẳng")}
+          </span>
+        )}
+        {active && !busy && !glare && (
+          <span className="absolute bottom-4 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-[#111b39]/55 px-3.5 py-2 text-[12.5px] font-medium text-white backdrop-blur" data-testid="live-code-hint">
+            <QrCode size={15} />
+            {t("Tự quét mã vạch / QR khi đưa vào khung — chữ trên hộp thì bấm chụp")}
           </span>
         )}
 

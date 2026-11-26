@@ -143,6 +143,14 @@ class Settings:
     # Tra mã vạch trên mạng KHÔNG dùng AI (Tavily Search API + quy tắc đối chiếu số đăng ký). Khóa chỉ nằm trong server.env.
     tavily_api_key: str | None = field(default=None, repr=False)
     lookup_provider: str = "tavily"
+    # Giọng đọc tiếng Việt tự nhiên (Piper qua sherpa-onnx). Trống = <data_dir>/tts/vits-piper-vi_VN-vais1000-medium.
+    tts_model_dir: Path | None = None
+    # Trang web quét thuốc (bản web của ứng dụng điện thoại, cổng Public). Trống = không phục vụ trang web.
+    web_dir: Path | None = None
+    # Khách chưa đăng nhập trên trang web được quét thử bấy nhiêu lần (0 = tắt, phải đăng nhập ngay).
+    guest_scans: int = 5
+    guest_scans_per_ip_day: int = 30  # chặn lạm dụng: nhiều trình duyệt khách cùng một IP
+    guest_scans_total_day: int = 500  # trần cho TẤT CẢ khách mỗi ngày (bảo vệ GPU và hạn mức tra cứu trên mạng)
 
     @property
     def images_dir(self) -> Path:
@@ -253,4 +261,11 @@ def load_settings() -> Settings:
     s.tavily_api_key = (get("SMC_TAVILY_API_KEY") or "").strip() or None
     provider = (get("SMC_LOOKUP_PROVIDER") or "tavily").strip().lower()
     s.lookup_provider = provider if provider in LOOKUP_PROVIDERS else "tavily"
+    if get("SMC_TTS_MODEL_DIR"):
+        s.tts_model_dir = Path(str(get("SMC_TTS_MODEL_DIR")))
+    if get("SMC_WEB_DIR"):
+        s.web_dir = Path(str(get("SMC_WEB_DIR")))
+    s.guest_scans = max(0, int(get("SMC_GUEST_SCANS", "5") or 0))
+    s.guest_scans_per_ip_day = max(1, int(get("SMC_GUEST_IP_DAILY", "30") or 30))
+    s.guest_scans_total_day = max(1, int(get("SMC_GUEST_DAILY_TOTAL", "500") or 500))
     return s

@@ -12,8 +12,10 @@ import { SplashView } from "@/screens/SplashView";
 import { ServerScreen } from "@/screens/ServerScreen";
 import { colors, gutter } from "@/theme";
 import { useWindowDimensions } from "react-native";
+import { setupWeb } from "@/web/setup";
 
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+setupWeb(); // chỉ trang web: bộ đọc mã vạch tải .wasm từ chính máy chủ, camera không lật ảnh xem trước
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
@@ -55,10 +57,12 @@ function RootNavigator() {
   if (status === "loading") return <SplashView />;
   if (status === "offline") return <OfflineView />;
   const signedIn = status === "signedIn";
+  // Trang web: khách chưa đăng nhập vẫn vào được màn hình Quét (máy chủ đếm lượt quét thử), và mở được Đăng nhập/Đăng ký.
+  const inApp = signedIn || status === "guest";
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: "slide_from_right" }}>
       <Stack.Screen name="index" />
-      <Stack.Protected guard={signedIn}>
+      <Stack.Protected guard={inApp}>
         <Stack.Screen name="(app)" />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>

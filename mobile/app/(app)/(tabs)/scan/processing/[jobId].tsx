@@ -10,7 +10,7 @@ import { useHideTabBar } from "@/components/tabBarVisibility";
 import { ConnectionErrorView, UnrecognizedView } from "@/components/states";
 import { Button, Card, Chip, InfoBox, type as T } from "@/components/ui";
 import { pickFromLibrary } from "@/scan/image";
-import { scanErrorMessage } from "@/scan/startScan";
+import { scanErrorMessage, submitOrPromptLogin } from "@/scan/startScan";
 import { colors, font } from "@/theme";
 
 const POLL_MS = 600;
@@ -136,8 +136,8 @@ export default function ProcessingScreen() {
     try {
       const image = await pickFromLibrary();
       if (!image) return;
-      const next = await api.submitScan(image, "upload");
-      router.replace({ pathname: "/scan/processing/[jobId]", params: { jobId: next.id } });
+      const next = await submitOrPromptLogin(image, "upload"); // khách hết lượt quét thử → đăng nhập
+      if (next) router.replace({ pathname: "/scan/processing/[jobId]", params: { jobId: next.id } });
     } catch (e) {
       setFailure(scanErrorMessage(e));
     }

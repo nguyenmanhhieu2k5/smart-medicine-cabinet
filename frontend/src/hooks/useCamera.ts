@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { frameScore, glareRatio } from "@/scan/frameQuality";
 import { api } from "@/services/api";
+
+const CAPTURE_FRAMES = 6;
 
 export type CameraStatus = "idle" | "starting" | "active" | "error";
 
@@ -116,7 +119,10 @@ export function useCamera(preferredDeviceId: string | null | undefined) {
     [deviceId, refreshDevices, stop],
   );
 
-  /** Chụp vài khung liên tiếp và giữ khung nét nhất. */
+  /**
+   * Chụp 6 khung liên tiếp (~0,5 giây) và giữ khung nét nhất, ÍT LÓA nhất: tay cầm vỉ/hộp rung nhẹ làm chỗ lóa
+   * dịch chuyển, nên trong vài khung thường có khung chữ không bị lóa che.
+   */
   const capture = useCallback(async (): Promise<Capture | null> => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return null;
@@ -134,9 +140,10 @@ export function useCamera(preferredDeviceId: string | null | undefined) {
 
     let best = -1;
     let bestBitmap: ImageData | null = null;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < CAPTURE_FRAMES; i++) {
       probeCtx.drawImage(video, 0, 0, probe.width, probe.height);
-      const score = frameSharpness(probeCtx.getImageData(0, 0, probe.width, probe.height).data, probe.width, probe.height);
+      const pixels = probeCtx.getImageData(0, 0, probe.width, probe.height).data;
+      const score = frameScore(frameSharpness(pixels, probe.width, probe.height), glareRatio(pixels, probe.width, probe.height));
       if (score > best) {
         best = score;
         ctx.drawImage(video, 0, 0, width, height);

@@ -13,6 +13,7 @@ import { ProfilePage } from "@/pages/ProfilePage";
 import { RemindersPage } from "@/pages/RemindersPage";
 import { ScanPage } from "@/pages/ScanPage";
 import { ScanResultPage } from "@/pages/ScanResultPage";
+import { CodeResultPage } from "@/pages/CodeResultPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 const queryClient = new QueryClient({
@@ -26,6 +27,7 @@ export function AppRoutes() {
         <Route index element={<HomePage />} />
         <Route path="scan" element={<ScanPage />} />
         <Route path="scan/result/:jobId" element={<ScanResultPage />} />
+        <Route path="scan/code" element={<CodeResultPage />} />
         <Route path="cabinet" element={<CabinetPage />} />
         <Route path="cabinet/:itemId" element={<MedicineDetailPage source="cabinet" />} />
         <Route path="medicines/:medicineId" element={<MedicineDetailPage source="catalog" />} />

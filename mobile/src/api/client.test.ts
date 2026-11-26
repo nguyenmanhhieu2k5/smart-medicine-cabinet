@@ -161,3 +161,101 @@ describe("Gửi ảnh quét từ điện thoại", () => {
     expect(parts.find(([key]) => key === "source")?.[1]).toBe("upload");
   });
 });
+
+describe("Trang web: khách quét thử không cần đăng nhập (máy chủ đếm lượt)", () => {
+  const JOB = "0b8f2f7e-1f0c-4f0e-9a51-2a4b8c6d7e8f";
+  const GUEST = "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f";
+  const header = (init: RequestInit, name: string) => (init.headers as Record<string, string>)[name];
+
+  it("chưa đăng nhập + có mã khách → mọi thao tác quét đi qua /guest kèm X-Guest-Id, không gửi token", async () => {
+    const { impl, calls } = fakeFetch((url) => {
+      if (url.endsWith("/guest/barcodes/lookup")) return { status: 200, body: { status: "not_found", code: "893", guest: { limit: 5, remaining: 3 } } };
+      return { status: 200, body: { id: JOB, status: "queued" } };
+    });
+    const api = new ScannerApi(memoryStore(), impl, { web: true, webSession: () => false });
+    api.setBaseUrl(BASE);
+    api.setGuestId(GUEST);
+    const seen: number[] = [];
+    api.onGuestQuota((q) => seen.push(q.remaining));
+    expect(api.isGuest()).toBe(true);
+
+    await api.scan(JOB);
+    await api.lookupBarcode("8935206010121");
+    await api.medicine(34382);
+    await api.aiScan(JOB);
+    await api.aiLookup("qr", "SDK VN-20169-16");
+    await api.cancelScan(JOB);
+    expect(calls.map((c) => `${c.init.method} ${c.url.replace(BASE, "")}`)).toEqual([
+      `GET /api/v1/guest/scans/${JOB}`, "POST /api/v1/guest/barcodes/lookup", "GET /api/v1/guest/catalog/34382",
+      `POST /api/v1/guest/ai/scans/${JOB}`, "POST /api/v1/guest/ai/lookup", `DELETE /api/v1/guest/scans/${JOB}`,
+    ]);
+    expect(calls.every((c) => header(c.init, "X-Guest-Id") === GUEST && !auth(c.init))).toBe(true);
+    expect(seen).toEqual([3]); // số lượt còn lại cập nhật ngay sau lần quét mã
+    expect(api.thumbnailUrl(JOB)).toBe(`${BASE}/api/v1/guest/scans/${JOB}/thumbnail`);
+    expect(await api.authHeaders()).toEqual({ "X-Guest-Id": GUEST });
+  });
+
+  it("hết lượt quét thử → lỗi code guest_limit (trang web chuyển sang đăng nhập) và báo còn 0 lượt", async () => {
+    const { impl } = fakeFetch(() => ({ status: 401, body: { detail: "Bạn đã dùng hết 5 lượt quét miễn phí.", code: "guest_limit", guest: { limit: 5, remaining: 0 } } }));
+    const api = new ScannerApi(memoryStore(), impl, { web: true, webSession: () => false });
+    api.setBaseUrl(BASE);
+    api.setGuestId(GUEST);
+    const seen: number[] = [];
+    api.onGuestQuota((q) => seen.push(q.remaining));
+    const error = await api.lookupBarcode("8935206010121").catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("guest_limit");
+    expect(seen).toEqual([0]);
+  });
+
+  it("đăng nhập trên trang web: phiên nằm trong cookie HttpOnly — không giữ refresh token, quét đi đường thường", async () => {
+    const { impl, calls } = fakeFetch((url) => {
+      if (url.endsWith("/auth/login") || url.endsWith("/auth/refresh")) return { status: 200, body: { ...tokens(1), refresh_token: null } };
+      return { status: 200, body: { id: JOB, status: "queued" } };
+    });
+    const store = memoryStore();
+    const api = new ScannerApi(store, impl, { web: true, webSession: () => true });
+    api.setBaseUrl(BASE);
+    api.setGuestId(GUEST);
+    await api.login("scanner@example.com", "Scanner2026");
+    expect(api.isSignedIn()).toBe(true);
+    expect(api.isGuest()).toBe(false);
+    expect(await store.get(KEYS.refreshToken)).toBeNull();
+    await api.scan(JOB);
+    expect(calls.at(-1)?.url).toBe(`${BASE}/api/v1/scans/${JOB}`);
+    expect(auth(calls.at(-1)!.init)).toBe("Bearer access-1");
+
+    // Tải lại trang: khôi phục phiên chỉ bằng cookie (thân yêu cầu rỗng).
+    const reloaded = new ScannerApi(memoryStore(), impl, { web: true, webSession: () => true });
+    reloaded.setBaseUrl(BASE);
+    expect(await reloaded.restore()).toBe(true);
+    const refresh = calls.at(-1)!;
+    expect(refresh.url).toBe(`${BASE}/api/v1/auth/refresh`);
+    expect(JSON.parse(String(refresh.init.body))).toEqual({});
+
+    await reloaded.logout();
+    expect(JSON.parse(String(calls.at(-1)!.init.body))).toEqual({}); // máy chủ đọc và xóa cookie
+  });
+
+  it("trang web chưa từng đăng nhập: không gọi làm mới vô ích, không báo “phiên hết hạn”", async () => {
+    const { impl, calls } = fakeFetch(() => ({ status: 401, body: { detail: "Chưa đăng nhập.", code: "no_session" } }));
+    const ended: string[] = [];
+    const api = new ScannerApi(memoryStore(), impl, { web: true, webSession: () => false });
+    api.setBaseUrl(BASE);
+    api.onSessionEnd((reason) => ended.push(reason));
+    expect(await api.restore()).toBe(false);
+    expect(calls).toHaveLength(0);
+
+    const stale = new ScannerApi(memoryStore(), impl, { web: true, webSession: () => true }); // cookie đánh dấu còn, phiên đã bị thu hồi
+    stale.setBaseUrl(BASE);
+    stale.onSessionEnd((reason) => ended.push(reason));
+    expect(await stale.restore()).toBe(false);
+    expect(ended).toEqual([]);
+  });
+
+  it("đường dẫn /guest nằm trong danh sách cho phép, đường lạ thì không", () => {
+    for (const path of ["/guest/status", "/guest/scans", `/guest/scans/${JOB}`, `/guest/scans/${JOB}/thumbnail`, "/guest/barcodes/lookup",
+      "/guest/catalog/34382", "/guest/ai/lookup", `/guest/ai/scans/${JOB}`]) expect(PUBLIC_PATH.test(path)).toBe(true);
+    for (const path of ["/guest/history", "/guest/cabinet/medicines", "/guest/me", "/guest/../admin/users"]) expect(PUBLIC_PATH.test(path)).toBe(false);
+  });
+});

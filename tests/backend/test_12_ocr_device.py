@@ -119,6 +119,27 @@ def test_load_falls_back_to_cpu_when_gpu_fails(tmp_path, monkeypatch, fake_paddl
     assert fake_paddle.created[-1]["enable_mkldnn"] is False
 
 
+def test_textline_orientation_used_only_when_model_is_on_disk(tmp_path, monkeypatch, fake_paddle):
+    """Mặc định bật xoay dòng chữ (vỉ thuốc in chữ dọc/ngược); thiếu mô hình thì tắt kèm ghi chú, KHÔNG tự tải khi nạp."""
+    monkeypatch.setattr(engine_module, "paddle_gpu_status", lambda: (False, "không có GPU"))
+    assert AppSettings().ocr_use_textline_orientation is True
+    eng = _engine(tmp_path, use_textline_orientation=True)
+    eng.load()
+    assert fake_paddle.created[-1]["use_textline_orientation"] is False
+    assert "textline_orientation_model_name" not in fake_paddle.created[-1]  # không để PaddleOCR đi tải
+    assert eng.info()["textline_orientation"] is False and "PP-LCNet_x0_25_textline_ori" in eng.info()["textline_note"]
+
+    model = tmp_path / engine_module.TEXTLINE_ORI_MODEL
+    model.mkdir()
+    (model / "inference.pdiparams").write_bytes(b"x")
+    (model / "inference.yml").write_text("x")
+    eng = _engine(tmp_path, use_textline_orientation=True)
+    eng.load()
+    assert fake_paddle.created[-1]["use_textline_orientation"] is True
+    assert fake_paddle.created[-1]["textline_orientation_model_dir"] == str(model)
+    assert eng.info()["textline_orientation"] is True and eng.info()["textline_note"] is None
+
+
 def test_paddle_on_cpu_disables_onednn(tmp_path, monkeypatch, fake_paddle):
     monkeypatch.setattr(engine_module, "paddle_gpu_status", lambda: pytest.fail("không được kiểm tra GPU khi đã chọn CPU"))
     eng = _engine(tmp_path, device="cpu")

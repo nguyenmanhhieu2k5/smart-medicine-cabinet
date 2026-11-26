@@ -32,6 +32,14 @@ openpyxl==3.1.5
 numpy==2.3.5
 rapidfuzz==3.14.6
 
+# --- Đọc mã vạch / mã QR trong ảnh quét (EAN, UPC, ITF, Code 128, QR, DataMatrix GS1) ---
+zxing-cpp==3.2.0
+
+# --- Giọng đọc tiếng Việt tự nhiên cho ứng dụng Windows (Piper vi_VN-vais1000, offline) ---
+# Bản 2.x bỏ bộ chuyển chữ→âm espeak-ng có sẵn nên không đọc được chữ tiếng Việt; giữ 1.13.x.
+# Mô hình (~78 MB, CC BY 4.0): python scripts/download_tts_model.py
+sherpa-onnx==1.13.8
+
 # --- OCR: PaddleOCR 3.x chạy bằng ONNX Runtime trên CPU (mặc định, không cần GPU) ---
 # paddleocr kéo theo paddlex[ocr-core] và opencv-contrib-python==4.10.0.84 (cung cấp cv2);
 # KHÔNG cài thêm opencv-python / opencv-python-headless để tránh hai bản cv2 đè lên nhau.

@@ -25,6 +25,8 @@ from app.services.excel_import.manager import ImportManager
 from app.services.medicine_matcher.catalog import CatalogRepository
 from app.services.ai.medicine import AiMedicineService
 from app.services.ocr.service import OcrService
+from app.services.guest import GuestQuota
+from app.services.tts import TtsService
 
 log = logging.getLogger("smc")
 MEDICINE_ALERT_INTERVAL = 15 * 60  # giây
@@ -67,6 +69,8 @@ class AppContext:
         )
         self.devices = DeviceHub(self.db, settings)
         self.ai = AiMedicineService(self.db, settings)
+        self.tts = TtsService(settings)
+        self.guests = GuestQuota(self.db, settings, self.limiter)
         self.started_at = clock.now()
         self._tasks: list[asyncio.Task] = []
         self._running = False
@@ -113,6 +117,7 @@ class AppContext:
             ]
             if self.settings.ocr_engine != "disabled":
                 self.ocr.warmup()  # nạp mô hình ngay để lượt quét đầu tiên không phải chờ
+            self.tts.warmup()  # nạp giọng đọc ở nền (~1–2 giây) để lần bấm “Đọc” đầu tiên không phải chờ
 
     async def shutdown(self) -> None:
         for task in self._tasks:

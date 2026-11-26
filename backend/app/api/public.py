@@ -9,8 +9,8 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
@@ -20,7 +20,7 @@ from app.api.deps import bad_request, get_ctx, not_found
 from app.api.ocr import parse_crop, read_image
 from app.auth.deps import client_ip, get_principal, request_meta, require
 from app.auth.ratelimit import RateLimitExceeded
-from app.auth.service import Principal, audit, user_public
+from app.auth.service import AuthError, Principal, audit, user_public
 from app.core import clock
 from app.core.context import AppContext
 from app.database.session import APP_TIMEZONE, iso_local
@@ -64,6 +64,8 @@ def app_config(ctx: AppContext = Depends(get_ctx)) -> dict:
         "ocr_timeout_seconds": 30,
         "max_candidates": 3,
         "server_version": __version__,
+        # Trang web: khách chưa đăng nhập được quét thử bấy nhiêu lần (ứng dụng điện thoại luôn yêu cầu đăng nhập).
+        "guest": {"enabled": ctx.guests.enabled, "scans": ctx.guests.limit},
     }
 
 
@@ -82,7 +84,8 @@ class LoginBody(BaseModel):
 
 
 class RefreshBody(BaseModel):
-    refresh_token: str = Field(..., min_length=20, max_length=200)
+    # Trang web để trống: refresh token nằm trong cookie HttpOnly (xem _web_session).
+    refresh_token: str | None = Field(None, min_length=20, max_length=200)
 
 
 class ForgotBody(BaseModel):
@@ -109,24 +112,78 @@ class PasswordBody(BaseModel):
 ALLOWED_PREFERENCES = {"notifications", "vibrate_on_scan", "image_quality", "language", "theme"}
 
 
+# Trang web: refresh token nằm trong cookie HttpOnly (JavaScript không đọc được → mã độc chèn vào trang cũng không lấy
+# được phiên dài hạn), SameSite=Strict + chỉ gửi tới /api/v1/auth. Cookie "smc_web" (không HttpOnly, không chứa bí mật)
+# chỉ để trang web biết "có phiên" mà khỏi gọi làm mới vô ích. Ứng dụng điện thoại vẫn nhận refresh token trong JSON.
+REFRESH_COOKIE = "smc_refresh"
+WEB_MARK_COOKIE = "smc_web"
+REFRESH_COOKIE_PATH = "/api/v1/auth"
+
+
+def _is_web(request: Request) -> bool:
+    return (request.headers.get("x-smc-client") or "").lower().startswith("mobile-web")
+
+
+def _https(request: Request) -> bool:
+    """Trang web chạy qua HTTPS (Cloudflare Tunnel / Tailscale Funnel đặt header khi chuyển tiếp về máy chủ)."""
+    return (request.url.scheme == "https" or (request.headers.get("x-forwarded-proto") or "").lower() == "https"
+            or '"https"' in (request.headers.get("cf-visitor") or "").lower())
+
+
+def _web_session(request: Request, response: Response, data: dict, ctx: AppContext) -> dict:
+    if not _is_web(request) or not data.get("refresh_token"):
+        return data
+    max_age = ctx.settings.refresh_token_days * 86400
+    secure = _https(request)
+    response.set_cookie(REFRESH_COOKIE, data["refresh_token"], max_age=max_age, path=REFRESH_COOKIE_PATH,
+                        httponly=True, secure=secure, samesite="strict")
+    response.set_cookie(WEB_MARK_COOKIE, "1", max_age=max_age, path="/", httponly=False, secure=secure, samesite="strict")
+    return {**data, "refresh_token": None}
+
+
+def _clear_web_session(response: Response) -> None:
+    response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH, httponly=True, samesite="strict")
+    response.delete_cookie(WEB_MARK_COOKIE, path="/", samesite="strict")
+
+
+def _refresh_token(body: RefreshBody, request: Request) -> str | None:
+    return body.refresh_token or (request.cookies.get(REFRESH_COOKIE) if _is_web(request) else None)
+
+
 @router.post("/auth/register", status_code=201, tags=["auth"])
-def register(body: RegisterBody, request: Request, ctx: AppContext = Depends(get_ctx)) -> dict:
-    return ctx.auth.register(email=body.email, password=body.password, full_name=body.full_name, meta=request_meta(request))
+def register(body: RegisterBody, request: Request, response: Response, ctx: AppContext = Depends(get_ctx)) -> dict:
+    data = ctx.auth.register(email=body.email, password=body.password, full_name=body.full_name, meta=request_meta(request))
+    return _web_session(request, response, data, ctx)
 
 
 @router.post("/auth/login", tags=["auth"])
-def login(body: LoginBody, request: Request, ctx: AppContext = Depends(get_ctx)) -> dict:
-    return ctx.auth.login(email=body.email, password=body.password, channel="public", meta=request_meta(request))
+def login(body: LoginBody, request: Request, response: Response, ctx: AppContext = Depends(get_ctx)) -> dict:
+    data = ctx.auth.login(email=body.email, password=body.password, channel="public", meta=request_meta(request))
+    return _web_session(request, response, data, ctx)
 
 
 @router.post("/auth/refresh", tags=["auth"])
-def refresh(body: RefreshBody, request: Request, ctx: AppContext = Depends(get_ctx)) -> dict:
-    return ctx.auth.refresh(refresh_token=body.refresh_token, channel="public", meta=request_meta(request))
+def refresh(request: Request, response: Response, body: RefreshBody | None = None, ctx: AppContext = Depends(get_ctx)) -> Any:
+    token = _refresh_token(body or RefreshBody(), request)
+    if not token:
+        return JSONResponse({"detail": "Chưa đăng nhập.", "code": "no_session"}, status_code=401)
+    try:
+        data = ctx.auth.refresh(refresh_token=token, channel="public", meta=request_meta(request))
+    except AuthError as exc:
+        failed = JSONResponse({"detail": exc.message, "code": exc.code}, status_code=exc.status_code)
+        if _is_web(request):
+            _clear_web_session(failed)  # cookie hết hạn/bị thu hồi: xóa để trang web về chế độ khách
+        return failed
+    return _web_session(request, response, data, ctx)
 
 
 @router.post("/auth/logout", tags=["auth"])
-def logout(body: RefreshBody, ctx: AppContext = Depends(get_ctx)) -> dict:
-    ctx.auth.logout(refresh_token=body.refresh_token)
+def logout(request: Request, response: Response, body: RefreshBody | None = None, ctx: AppContext = Depends(get_ctx)) -> dict:
+    token = _refresh_token(body or RefreshBody(), request)
+    if token:
+        ctx.auth.logout(refresh_token=token)
+    if _is_web(request):
+        _clear_web_session(response)
     return {"ok": True}
 
 
@@ -359,8 +416,14 @@ def public_job(job: dict[str, Any]) -> dict[str, Any]:
                 ],
             },
             "ocr_text": [ln.get("text") for ln in (result.get("ocr") or {}).get("lines", [])],
+            "barcodes": [
+                {k: b.get(k) for k in ("format", "text", "kind", "display", "status", "medicine_id", "match_by", "expiry", "lot")}
+                for b in result.get("barcodes") or []
+            ],
             "expiry_suggestion": result.get("expiry_suggestion"),
             "elapsed_ms": result.get("elapsed_ms"),
+            # % vùng giữa ảnh bị lóa sáng → ứng dụng nhắc nghiêng vỉ/hộp, tắt đèn flash rồi chụp lại.
+            "glare": (result.get("image") or {}).get("glare"),
         }
     return {
         "id": job["id"], "status": job["status"], "progress": job["progress"], "message": job["message"],

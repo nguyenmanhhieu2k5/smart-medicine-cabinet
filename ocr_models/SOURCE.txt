@@ -20,6 +20,13 @@ PP-OCRv6_medium_rec/  nhận dạng chữ           (inference.pdiparams + infer
 - Dùng cho engine PaddlePaddle (mặc định của bản cài đặt có kèm PaddlePaddle; chạy GPU NVIDIA nếu có).
   Engine ONNX Runtime không dùng hai thư mục này.
 
+PP-LCNet_x0_25_textline_ori/  xoay dòng chữ   (inference.pdiparams + inference.json + inference.yml + config.json)
+
+- Mô hình phân loại hướng dòng chữ (0° / 180°) CHÍNH THỨC của PaddleOCR (Apache-2.0), tải bằng
+  scripts/download_ocr_models.py --textline  (trình quản lý mô hình của PaddleX 3.7).
+- Dùng khi bật cài đặt 'ocr_use_textline_orientation' (mặc định bật, engine PaddlePaddle);
+  thiếu thư mục này thì máy chủ tự tắt tùy chọn và vẫn OCR bình thường.
+
 Thay bằng gói chính thức
 ------------------------
     python scripts/download_ocr_models.py            # tải PP-OCRv6_small_*_onnx từ Hugging Face/ModelScope/BOS

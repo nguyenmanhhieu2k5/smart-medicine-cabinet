@@ -20,8 +20,14 @@ const CONFIDENCE = {
  * "Không có thuốc đúng? Tìm trên mạng" — chỉ chạy khi người dùng bấm (xác nhận không có kết quả đúng).
  * Máy chủ tìm tên thuốc in trên hộp trên Internet (Tavily, không AI — mặc định) hoặc hỏi Gemini, tùy SMC_LOOKUP_PROVIDER;
  * kết quả chỉ để tham khảo, không tự vào tủ thuốc.
+ * `code`: ảnh có mã vạch/QR mà dữ liệu chưa có → tìm theo đúng mã đó thay cho chữ trên hộp.
+ * `autoStart`: tự tìm ngay khi hiện (quét mã trực tiếp bằng camera) thay vì chờ người dùng bấm.
  */
-export function AiLookupPanel({ jobId }: { jobId: string }) {
+export function AiLookupPanel({ jobId, code, autoStart = false }: {
+  jobId?: string;
+  code?: { kind: "barcode" | "qr"; value: string; label: string };
+  autoStart?: boolean;
+}) {
   const t = useT();
   const [state, setState] = useState<"idle" | "loading" | "done">("idle");
   const [data, setData] = useState<AiLookupResult | null>(null);
@@ -41,7 +47,8 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
     setState("loading");
     setError(null);
     try {
-      setData(await api.aiScan(jobId));
+      if (code) setData(await api.aiLookup(code.kind, code.value));
+      else if (jobId) setData(await api.aiScan(jobId));
     } catch (e) {
       setError(errorMessage(e));
       setData(null);
@@ -49,6 +56,14 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
       setState("done");
     }
   };
+
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (!autoStart || autoRan.current) return;
+    autoRan.current = true;
+    void run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart]);
 
   const info = data?.result;
   const confidence = info ? CONFIDENCE[info.do_tin_cay] ?? CONFIDENCE.thap : null;
@@ -58,8 +73,15 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
         <div className="flex items-center gap-3">
           <IconTile icon={Globe} tone="info" />
           <div>
-            <h2 className="font-display text-[19px] font-bold text-navy">{t("Không có thuốc đúng? Tìm trên mạng")}</h2>
-            <p className="mt-0.5 text-[13px] text-muted">{t("Máy chủ tìm tên thuốc in trên hộp trên Internet rồi đối chiếu số đăng ký với danh mục Cục Quản lý Dược. Kết quả chỉ để tham khảo, không tự lưu vào tủ.")}</p>
+            <h2 className="font-display text-[19px] font-bold text-navy">
+              {code?.kind === "qr" ? t("Mã QR — Tìm thuốc trên mạng")
+                : code ? t("{label} chưa có dữ liệu — Tìm trên mạng", { label: code.label }) : t("Không có thuốc đúng? Tìm trên mạng")}
+            </h2>
+            <p className="mt-0.5 text-[13px] text-muted">
+              {code
+                ? t("Máy chủ tìm đúng mã này trên Internet rồi đối chiếu số đăng ký với danh mục Cục Quản lý Dược. Kết quả chỉ để tham khảo, không tự lưu vào tủ.")
+                : t("Máy chủ tìm tên thuốc in trên hộp trên Internet rồi đối chiếu số đăng ký với danh mục Cục Quản lý Dược. Kết quả chỉ để tham khảo, không tự lưu vào tủ.")}
+            </p>
           </div>
         </div>
         <PrimaryButton variant={state === "idle" ? "primary" : "secondary"} icon={state === "loading" ? LoaderCircle : Search} loading={state === "loading"}
@@ -115,7 +137,7 @@ export function AiLookupPanel({ jobId }: { jobId: string }) {
                 <p className="mb-2 text-[13px] font-semibold text-muted">{t("Trong danh mục thuốc")}</p>
                 <div className="space-y-2">
                   {data.catalog_matches.map((m) => (
-                    <Link key={m.id} to={`/medicines/${m.id}?scan=${jobId}`} className="flex items-center gap-3 rounded-2xl bg-tile px-4 py-3 transition-colors hover:bg-primary-soft">
+                    <Link key={m.id} to={jobId ? `/medicines/${m.id}?scan=${jobId}` : `/medicines/${m.id}`} className="flex items-center gap-3 rounded-2xl bg-tile px-4 py-3 transition-colors hover:bg-primary-soft">
                       <IconTile icon={m.match_by === "registration" ? BadgeCheck : Pill} tone={m.match_by === "registration" ? "success" : "info"} size="sm" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[14.5px] font-semibold text-navy">{m.ten_thuoc}</span>

@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { AlertItem, MatchCandidate, OcrJob } from "@/types/api";
+import type { AlertItem, MatchCandidate, OcrJob, ScanBarcode } from "@/types/api";
 import { cabinetItem, installMockApi, type MockState } from "./mockApi";
 import { renderApp } from "./renderApp";
 
@@ -129,6 +129,26 @@ describe("Kết quả nhận diện", () => {
     });
   });
 
+  it("ảnh bị lóa sáng mà kết quả chưa chắc chắn: nhắc nghiêng vỉ/hộp rồi chụp lại; ảnh không lóa thì không nhắc", async () => {
+    const glared = job("uncertain", [candidate(20839, "Desloderma 5", "5mg", 73)]);
+    glared.result!.image.glare = 6.2;
+    api.job = glared;
+    const { unmount } = renderApp("/scan/result/job1");
+    expect(await screen.findByTestId("glare-tip")).toHaveTextContent("Ảnh bị lóa sáng ở vùng giữa");
+    expect(screen.getByTestId("glare-tip")).toHaveTextContent("Nghiêng nhẹ vỉ/hộp thuốc");
+    unmount();
+
+    for (const [status, glare] of [["uncertain", 1.0], ["confident", 9.0]] as const) {
+      const other = job(status, [candidate(20839, "Desloderma 5", "5mg", status === "confident" ? 92 : 73)]);
+      other.result!.image.glare = glare;
+      api.job = other;
+      const view = renderApp("/scan/result/job1");
+      await screen.findAllByRole("radio");
+      expect(screen.queryByTestId("glare-tip")).toBeNull(); // lóa ít, hoặc đã chắc chắn → không làm phiền
+      view.unmount();
+    }
+  });
+
   it("lần quét không tồn tại: báo lỗi và cho quét lại", async () => {
     renderApp("/scan/result/khongco");
     expect(await screen.findByText("Không tìm thấy lần quét này")).toBeInTheDocument();
@@ -186,6 +206,45 @@ describe("Mã vạch thuốc (Cài đặt)", () => {
     expect(api.calls.some((call) => call.method === "DELETE")).toBe(false);
     await user.click(within(dialog).getByRole("button", { name: "Gỡ liên kết" }));
     await waitFor(() => expect(api.calls).toContainEqual({ method: "DELETE", path: "/catalog/barcodes/08935206010120", body: null }));
+  });
+});
+
+describe("Ảnh quét có mã vạch / mã QR (máy chủ đọc mã cùng lúc với OCR)", () => {
+  const barcode = (status: ScanBarcode["status"], extra: Partial<ScanBarcode> = {}): ScanBarcode => ({
+    format: "EAN-13", text: "8935206010121", kind: "gtin", display: "8935206010121", status,
+    medicine_id: status === "found" ? 1 : null, match_by: status === "found" ? "barcode" : null, expiry: null, lot: null, ...extra,
+  });
+
+  it("mã khớp dữ liệu: hiện mã, ngày hết hạn trong mã, thuốc khớp mã đứng đầu và được chọn sẵn", async () => {
+    const top = { ...candidate(1, "Augmentin 625mg tablets", "500mg/125mg", 100), components: [
+      { key: "barcode" as const, label: "Mã vạch/QR", status: "match" as const, value: 1, weight: 1, detail: "Mã vạch 8935206010121 (EAN-13) đã gắn với thuốc này" }] };
+    const withCode = job("confident", [top]);
+    withCode.result!.barcodes = [barcode("found", { format: "Data Matrix", expiry: "2027-06-30", lot: "LOT2026A" })];
+    api.job = withCode;
+    renderApp("/scan/result/job1");
+    const strip = await screen.findByTestId("scan-barcodes");
+    expect(strip).toHaveTextContent("Data Matrix");
+    expect(strip).toHaveTextContent("8935206010121");
+    expect(strip).toHaveTextContent("Khớp dữ liệu mã vạch");
+    expect(strip).toHaveTextContent("30/06/2027");
+    expect(strip).toHaveTextContent("LOT2026A");
+    expect(screen.getByTestId("confirm-save")).toBeEnabled();
+    expect(within(screen.getByTestId("ai-panel")).getByText("Không có thuốc đúng? Tìm trên mạng")).toBeInTheDocument();
+  });
+
+  it("mã chưa có dữ liệu: “Tìm trên mạng” tra đúng mã đó (không tra chữ trên hộp)", async () => {
+    const withCode = job("uncertain", [candidate(2, "Augmentin 250mg/31,25mg", "250mg/31,25mg", 77.5)]);
+    withCode.result!.barcodes = [barcode("not_found")];
+    api.job = withCode;
+    const user = userEvent.setup();
+    renderApp("/scan/result/job1");
+    expect(await screen.findByText("Chưa có dữ liệu mã vạch")).toBeInTheDocument();
+    const panel = screen.getByTestId("ai-panel");
+    expect(panel).toHaveTextContent("Mã vạch 8935206010121 chưa có dữ liệu — Tìm trên mạng");
+    await user.click(within(panel).getByRole("button", { name: "Tìm trên mạng" }));
+    await within(panel).findByTestId("ai-result");
+    expect(api.calls).toContainEqual({ method: "POST", path: "/ai/lookup", body: { kind: "barcode", code: "8935206010121" } });
+    expect(api.calls.some((call) => call.path.startsWith("/ai/scans/"))).toBe(false);
   });
 });
 
